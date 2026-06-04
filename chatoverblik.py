@@ -1068,6 +1068,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         addr = self.client_address[0] if self.client_address else ""
         return addr not in ("127.0.0.1", "::1", "localhost")
 
+    def _is_csrf(self):
+        """True hvis POST mangler en gyldig Origin/Referer mod localhost:PORT.
+
+        Beskytter mod cross-site requests fra browser-faner på andre sites:
+        en webside kan tvinge browseren til at POSTe til localhost, men kan
+        ikke sætte Origin-headeren — så vi afviser alle POST uden gyldig origin.
+        """
+        allowed = (f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}")
+        origin = self.headers.get("Origin", "")
+        if origin:
+            return origin not in allowed
+        # Hvis ingen Origin: tjek Referer som fallback (ældre browsere)
+        referer = self.headers.get("Referer", "")
+        if referer:
+            return not any(referer.startswith(a + "/") or referer == a for a in allowed)
+        # Hverken Origin eller Referer → afvis (typisk curl/CSRF-tricks)
+        return True
+
     def _forbidden(self):
         self.send_response(403)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -1197,10 +1215,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not cwd or not Path(cwd).is_dir():
                 self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
                 return
-            # Sikkerhed: skal være under et kendt projekt eller Masterversioner
+            # Sikkerhed: skal være under et kendt projekt eller Masterversioner.
+            # Filtrér tomme strenge fra — ellers ville startswith(""+"/") matche
+            # ENHVER absolut sti og åbne for path-traversal.
             valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
             valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
             valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            valid_roots = {r for r in valid_roots if r}
             cwd_norm = cwd.rstrip("/")
             allowed = any(cwd_norm == r or cwd_norm.startswith(r + "/") for r in valid_roots)
             if not allowed:
@@ -1217,17 +1238,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not file_path or not Path(file_path).is_file():
                 self._send_json({"ok": False, "error": "Fil findes ikke"}, 400)
                 return
-            # Sikkerhed: skal være under et kendt projekt eller Masterversioner
+            # Sikkerhed: skal være under et kendt projekt eller Masterversioner.
+            # Filtrér tomme strenge fra — ellers ville startswith(""+"/") matche
+            # ENHVER absolut sti og åbne for path-traversal.
             valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
             valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
             valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            valid_roots = {r for r in valid_roots if r}
             try:
                 target = Path(file_path).resolve()
             except Exception:
                 self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
                 return
             target_str = str(target)
-            allowed = any(target_str.startswith(r + "/") for r in valid_roots)
+            allowed = any(target_str == r or target_str.startswith(r + "/") for r in valid_roots)
             if not allowed:
                 self._send_json({"ok": False, "error": "Filen er ikke tilladt"}, 403)
                 return
@@ -1387,7 +1411,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self._is_external():
             self._forbidden()
             return
+        if self._is_csrf():
+            self._send_json({"ok": False, "error": "Ugyldig origin"}, 403)
+            return
         length = int(self.headers.get("Content-Length", "0"))
+        # Cap: en POST på 5 MB er rigeligt for alle eksisterende endpoints
+        # (widgets-doc, project-handover osv.). Forhindrer OOM-DoS.
+        if length > 5_000_000:
+            self._send_json({"ok": False, "error": "Body for stor"}, 413)
+            return
         raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8"))
@@ -1998,20 +2030,6 @@ En ting der overraskede dig i mønstrene"""
                     s["title"] = new_title or s.get("ai_title") or fallback_title(s["first_user"])
                     break
             self._send_json({"ok": True, "title": new_title})
-            return
-
-        if self.path == "/api/open-in-terminal":
-            cwd = data.get("cwd", "")
-            cmd = data.get("cmd", "")
-            if not cwd:
-                self._send_json({"ok": False, "error": "Mangler cwd"}, 400)
-                return
-            script = f'tell application "Terminal"\n  activate\n  do script "cd {json.dumps(cwd)[1:-1]} && {cmd}"\nend tell'
-            try:
-                subprocess.Popen(["osascript", "-e", script])
-                self._send_json({"ok": True})
-            except Exception as e:
-                self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
         self._send_json({"error": "unknown route"}, 404)
