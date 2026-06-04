@@ -113,7 +113,7 @@ def extract_text_from_content(content):
 _TAG_BLOCKS = [
     "ide_opened_file", "ide_selection", "system-reminder", "command-name",
     "command-message", "command-args", "local-command-stdout", "local-command-stderr",
-    "environment_context", "permissions instructions", "collaboration_mode",
+    "environment_context", "permissions", "collaboration_mode",
     "INSTRUCTIONS", "user-prompt-submit-hook",
 ]
 _TAG_RE = re.compile(
@@ -1117,9 +1117,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _serve_preview(self):
         """Server filer fra en projektmappe under /preview/<base64-cwd>/<sti>."""
         import base64, mimetypes
-        from urllib.parse import unquote
+        from urllib.parse import unquote, urlparse
         try:
-            rest = self.path[len("/preview/"):]
+            # Brug urlparse for at strippe query-string (?v=cachebust osv.)
+            # Ellers ville assets med cache-busting give 404.
+            path_only = urlparse(self.path).path
+            rest = path_only[len("/preview/"):]
             parts = rest.split("/", 1)
             encoded = parts[0]
             sub_path = unquote(parts[1]) if len(parts) > 1 else "index.html"
@@ -1483,10 +1486,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
                 else:
-                    fallback = [workspace_root]
-                    if file_to_open:
-                        fallback.append(file_to_open)
-                    subprocess.Popen(["open", "-a", "Visual Studio Code"] + fallback,
+                    subprocess.Popen(["open", "-a", "Visual Studio Code", workspace_root],
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
 
@@ -1749,11 +1749,26 @@ Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
             return
 
         if self.path == "/api/weekly-retro":
-            # Workflow-analyse begrænset til sidste 7 dage
+            # Workflow-analyse begrænset til sidste 7 dage.
+            # Parse timestamps til datetime før sammenligning — Claude bruger
+            # 'Z'-suffix, isoformat() bruger '+00:00', og string-compare på
+            # tværs af de to suffixer er forkert (Z > + lexicografisk).
             from datetime import datetime, timezone, timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-            recent = [s for s in STATE["sessions"]
-                     if (s.get("ended") or s.get("started") or "") >= cutoff]
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=7)
+
+            def _parse_ts(s):
+                if not s:
+                    return None
+                try:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+
+            recent = []
+            for s in STATE["sessions"]:
+                ts = _parse_ts(s.get("ended") or s.get("started"))
+                if ts and ts >= cutoff_dt:
+                    recent.append(s)
             if not recent:
                 self._send_json({"ok": False, "error": "Ingen chats sidste 7 dage"}, 400)
                 return
