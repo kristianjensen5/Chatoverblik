@@ -1,0 +1,2039 @@
+#!/usr/bin/env python3
+"""
+Chatoverblik — lokal webside der viser alle Claude- og Codex-chats.
+
+Start:
+    python3 chatoverblik.py
+
+Åbn så http://localhost:7777 i browseren.
+
+Krav:
+    - Python 3.9+
+    - Miljøvariabel ANTHROPIC_API_KEY (til AI-titler)
+"""
+
+import html
+import http.server
+import json
+import os
+import re
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+# ───────── Konfiguration ─────────
+HOME = Path.home()
+CLAUDE_DIR = HOME / ".claude" / "projects"
+CODEX_DIR = HOME / ".codex" / "sessions"
+HERE = Path(__file__).parent
+CACHE_FILE = HERE / "cache.json"
+INDEX_FILE = HERE / "index.html"
+PORT = 7777
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+MODEL = "claude-haiku-4-5-20251001"
+PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
+MAX_PARALLEL_AI_CALLS = 8
+
+
+# ───────── Cache for AI-titler ─────────
+def load_cache():
+    if CACHE_FILE.exists():
+        try:
+            return json.loads(CACHE_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def save_cache(cache):
+    tmp = CACHE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
+    tmp.replace(CACHE_FILE)
+
+
+# ───────── Læs chats fra disk ─────────
+def read_first_lines(path, limit=20):
+    lines = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= limit:
+                    break
+                line = line.strip()
+                if line:
+                    lines.append(line)
+    except Exception:
+        pass
+    return lines
+
+
+def parse_jsonl(path):
+    msgs = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msgs.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    return msgs
+
+
+def extract_text_from_content(content):
+    """Codex og Claude bruger lidt forskellige content-formater."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text" and "text" in part:
+                    chunks.append(part["text"])
+                elif "text" in part:
+                    chunks.append(str(part["text"]))
+                elif part.get("type") == "input_text":
+                    chunks.append(part.get("text", ""))
+            elif isinstance(part, str):
+                chunks.append(part)
+        return "\n".join(chunks)
+    return ""
+
+
+# Tags Claude og Codex pakker IDE-kontekst og system-reminders ind i.
+# Vi fjerner indholdet af disse blokke for at finde den rigtige bruger-tekst.
+_TAG_BLOCKS = [
+    "ide_opened_file", "ide_selection", "system-reminder", "command-name",
+    "command-message", "command-args", "local-command-stdout", "local-command-stderr",
+    "environment_context", "permissions instructions", "collaboration_mode",
+    "INSTRUCTIONS", "user-prompt-submit-hook",
+]
+_TAG_RE = re.compile(
+    r"<(" + "|".join(re.escape(t) for t in _TAG_BLOCKS) + r")\b[^>]*>.*?</\1>",
+    re.S | re.I,
+)
+_SELF_CLOSE_RE = re.compile(
+    r"<(" + "|".join(re.escape(t) for t in _TAG_BLOCKS) + r")\b[^/>]*/?>",
+    re.I,
+)
+_BOOTSTRAP_PREFIXES = (
+    "# AGENTS.md", "# CLAUDE.md", "<permissions",
+    "<collaboration_mode", "<environment_context",
+)
+
+
+def clean_user_text(text):
+    """Fjern IDE-kontekst, system-tags og bootstrap-prompts for at finde den
+    egentlige besked brugeren skrev."""
+    if not text:
+        return ""
+    cleaned = _TAG_RE.sub("", text)
+    cleaned = _SELF_CLOSE_RE.sub("", cleaned)
+    # Windsurf-Codex pakker brugerinput ind i "Context from my IDE setup" —
+    # det rigtige input ligger efter "My request for Codex:"
+    for marker in ("## My request for Codex:", "## My request:", "My request for Codex:"):
+        idx = cleaned.find(marker)
+        if idx != -1:
+            cleaned = cleaned[idx + len(marker):]
+            break
+    # Trim tomme linjer
+    lines = [ln for ln in cleaned.splitlines() if ln.strip()]
+    return "\n".join(lines).strip()
+
+
+def is_bootstrap_message(text):
+    """True hvis dette ligner system-instruktioner (AGENTS.md mv.), ikke brugerinput."""
+    t = text.lstrip()
+    if not t:
+        return True
+    return t.startswith(_BOOTSTRAP_PREFIXES)
+
+
+def scan_claude():
+    """Returnér liste af chat-meta fra ~/.claude/projects/*/<session>.jsonl."""
+    sessions = []
+    if not CLAUDE_DIR.exists():
+        return sessions
+    for project_dir in CLAUDE_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for f in project_dir.glob("*.jsonl"):
+            msgs = parse_jsonl(f)
+            if not msgs:
+                continue
+            # Spring sidechains over (subagent-konvos der ligger som top-fil)
+            cwd = next((m.get("cwd") for m in msgs if m.get("cwd")), "")
+            first_user_text = ""
+            timestamps = []
+            user_count = 0
+            assistant_count = 0
+            for m in msgs:
+                ts = m.get("timestamp")
+                if ts:
+                    timestamps.append(ts)
+                msg = m.get("message") or {}
+                role = msg.get("role") or m.get("type")
+                if role == "user":
+                    raw = extract_text_from_content(msg.get("content", ""))
+                    cleaned = clean_user_text(raw)
+                    if cleaned and not is_bootstrap_message(cleaned):
+                        user_count += 1
+                        if not first_user_text:
+                            first_user_text = cleaned
+                elif role == "assistant":
+                    assistant_count += 1
+            if not first_user_text:
+                continue
+            session_id = f.stem
+            # Find evt. faktisk projektmappe via filstier i samtalen
+            path_hint = detect_subfolder_from_paths(cwd, msgs)
+            effective_cwd = path_hint or cwd
+            sessions.append({
+                "source": "claude",
+                "id": session_id,
+                "file": str(f),
+                "cwd": effective_cwd,
+                "original_cwd": cwd,
+                "project": project_name_from_cwd(effective_cwd),
+                "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
+                "started": timestamps[0] if timestamps else "",
+                "ended": timestamps[-1] if timestamps else "",
+                "msg_count": user_count + assistant_count,
+                "user_msg_count": user_count,
+            })
+    return sessions
+
+
+def scan_codex():
+    """Returnér liste fra ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl."""
+    sessions = []
+    if not CODEX_DIR.exists():
+        return sessions
+    for f in CODEX_DIR.rglob("rollout-*.jsonl"):
+        msgs = parse_jsonl(f)
+        if not msgs:
+            continue
+        meta = next((m for m in msgs if m.get("type") == "session_meta"), None) or {}
+        payload = meta.get("payload", {}) if isinstance(meta, dict) else {}
+        cwd = payload.get("cwd", "")
+        sess_id = payload.get("id") or f.stem
+        started = payload.get("timestamp") or meta.get("timestamp", "")
+        first_user_text = ""
+        user_count = 0
+        assistant_count = 0
+        last_ts = started
+        for m in msgs:
+            if m.get("timestamp"):
+                last_ts = m["timestamp"]
+            t = m.get("type")
+            p = m.get("payload", {}) if isinstance(m.get("payload"), dict) else {}
+            # Codex event_msg/user_message er den rene tekst brugeren skrev
+            if t == "event_msg" and p.get("type") == "user_message":
+                txt = (p.get("message") or extract_text_from_content(p.get("content", ""))).strip()
+                if txt and not is_bootstrap_message(txt):
+                    user_count += 1
+                    if not first_user_text:
+                        first_user_text = clean_user_text(txt)
+            elif t == "event_msg" and p.get("type") == "agent_message":
+                assistant_count += 1
+        # Fallback: brug response_item-messages hvis ingen event_msg user_messages fundet
+        if not first_user_text:
+            for m in msgs:
+                if m.get("type") == "response_item":
+                    p = m.get("payload", {})
+                    if p.get("type") == "message" and p.get("role") == "user":
+                        raw = extract_text_from_content(p.get("content", ""))
+                        cleaned = clean_user_text(raw)
+                        if cleaned and not is_bootstrap_message(cleaned):
+                            first_user_text = cleaned
+                            user_count = max(user_count, 1)
+                            break
+        if not first_user_text:
+            continue
+        path_hint = detect_subfolder_from_paths(cwd, msgs)
+        effective_cwd = path_hint or cwd
+        sessions.append({
+            "source": "codex",
+            "id": sess_id,
+            "file": str(f),
+            "cwd": effective_cwd,
+            "original_cwd": cwd,
+            "project": project_name_from_cwd(effective_cwd),
+            "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
+            "started": started,
+            "ended": last_ts,
+            "msg_count": user_count + assistant_count,
+            "user_msg_count": user_count,
+        })
+    return sessions
+
+
+def project_name_from_cwd(cwd):
+    if not cwd:
+        return "(uden mappe)"
+    parts = [p for p in cwd.split("/") if p]
+    if not parts:
+        return "(rod)"
+    if "Masterversioner" in parts:
+        idx = parts.index("Masterversioner")
+        # Brug undermappens navn — eller "Masterversioner" hvis chatten er på rod-niveau
+        return parts[idx + 1] if idx + 1 < len(parts) else "Masterversioner"
+    return parts[-1]
+
+
+# ───────── URL-scanning per projekt ─────────
+_URL_RE = re.compile(r"https?://[a-zA-Z0-9./_?&=#%~+:@,;!*'()-]+")
+
+# Domæner vi vil VISE som live-links
+_LIVE_HOST_PATTERNS = (
+    ".pages.dev", ".workers.dev", ".github.io", ".netlify.app", ".vercel.app",
+    "borneavisen-app.workers.dev", "boerneavisen-app.workers.dev",
+    "politiken.dk", "pol.dk",
+)
+# Domæner vi springer over (CDN, dokumentation, baggrundsdata)
+_SKIP_HOSTS = (
+    "cdn.jsdelivr.net", "unpkg.com", "esm.sh", "cdnjs.cloudflare.com",
+    "fonts.googleapis.com", "fonts.gstatic.com", "use.typekit.net",
+    "console.anthropic.com", "console.cloudflare.com",
+    "developers.cloudflare.com", "docs.anthropic.com", "anthropic.com",
+    "stackoverflow.com", "github.io", "raw.githubusercontent.com",
+    "mdn.io", "developer.mozilla.org", "wikipedia.org",
+    "openai.com", "platform.openai.com",
+    "schemas.android.com", "www.w3.org",
+)
+
+
+def _normalize_url(u):
+    return u.rstrip(".,;:)]}>'\"")
+
+
+_ASSET_EXTS = (".js", ".css", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+               ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+               ".mp4", ".webm", ".mp3", ".wav", ".pdf",
+               ".json", ".xml", ".txt", ".map")
+
+_ASSET_PATH_HINTS = ("/assets/", "/incoming/static/", "/static/", "/fonts/",
+                     "/images/", "/img/", "/css/", "/dist/", "/build/",
+                     "/_next/", "/sw.js")
+
+
+def _classify_url(url):
+    """Returnér ('live'|'repo'|None, normaliseret URL) eller None hvis vi springer over."""
+    url = _normalize_url(url)
+    if "/api/" in url:
+        return None
+    lower = url.lower()
+    if lower.endswith(_ASSET_EXTS):
+        return None
+    if any(hint in lower for hint in _ASSET_PATH_HINTS):
+        return None
+    try:
+        host = url.split("/")[2].lower()
+    except IndexError:
+        return None
+    if any(host.endswith(h) for h in _SKIP_HOSTS):
+        return None
+    if "github.com" in host:
+        if "kristianjensen5" in url:
+            return ("repo", url)
+        return None
+    for pat in _LIVE_HOST_PATTERNS:
+        if pat in host:
+            return ("live", url)
+    return None
+
+
+def _wrangler_pages_url(toml_path):
+    """Læs `name = "..."` fra wrangler.toml og dan pages.dev-URL."""
+    try:
+        for line in toml_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line.startswith("name") and "=" in line and "[" not in line:
+                val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                if val and " " not in val:
+                    return f"https://{val}.pages.dev"
+                break
+    except Exception:
+        pass
+    return None
+
+
+def scan_project_urls(cwd):
+    """Find live-URLs og repo-URL i en projektmappe."""
+    if not cwd:
+        return []
+    root = Path(cwd)
+    if not root.exists() or not root.is_dir():
+        return []
+    urls = {}  # url -> kind
+
+    # 1) wrangler.toml → pages.dev
+    wrangler = root / "wrangler.toml"
+    if wrangler.exists():
+        u = _wrangler_pages_url(wrangler)
+        if u:
+            urls[u] = "live"
+
+    # 2) .git/config → GitHub-repo
+    gitcfg = root / ".git" / "config"
+    if gitcfg.exists():
+        try:
+            txt = gitcfg.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r'url\s*=\s*([^\s]+)', txt)
+            if m:
+                gu = m.group(1).strip()
+                if gu.endswith(".git"):
+                    gu = gu[:-4]
+                if "github.com" in gu:
+                    urls[gu] = "repo"
+        except Exception:
+            pass
+
+    # 3) Tekstfiler i roden — README, STATUS, DEPLOY, CLAUDE, alle *.md
+    text_targets = []
+    for name in ("README.md", "STATUS.md", "DEPLOY.md", "CLAUDE.md", "AGENTS.md"):
+        p = root / name
+        if p.exists():
+            text_targets.append(p)
+    # Alle .md-filer i roden (typisk få per projekt)
+    for p in sorted(root.glob("*.md")):
+        if p not in text_targets:
+            text_targets.append(p)
+
+    # 4) HTML-filer i roden — top + bund (anchors og kommentarer ligger ofte i bunden)
+    html_files = sorted(root.glob("*.html"))[:6]
+
+    for path in text_targets:
+        try:
+            txt = path.read_text(encoding="utf-8", errors="replace")
+            for raw in _URL_RE.findall(txt):
+                cls = _classify_url(raw)
+                if cls:
+                    kind, u = cls
+                    if u not in urls or (urls[u] == "repo" and kind == "live"):
+                        urls[u] = kind
+        except Exception:
+            continue
+
+    for path in html_files:
+        try:
+            txt = path.read_text(encoding="utf-8", errors="replace")
+            # Stor men ikke gigantisk — fanger URLs i kommentarer og top af head
+            snippet = txt[:30000]
+            for raw in _URL_RE.findall(snippet):
+                cls = _classify_url(raw)
+                if cls:
+                    kind, u = cls
+                    if u not in urls or (urls[u] == "repo" and kind == "live"):
+                        urls[u] = kind
+        except Exception:
+            continue
+
+    # Trin 1: dedup trailing slash
+    deduped = {}
+    for u, k in urls.items():
+        base = u.rstrip("/")
+        existing = deduped.get(base)
+        if existing is None:
+            deduped[base] = (u, k)
+        else:
+            ex_url, ex_kind = existing
+            if k == "live" and ex_kind == "repo":
+                deduped[base] = (u, k)
+            elif len(u) > len(ex_url):
+                deduped[base] = (u, ex_kind if ex_kind == k else k)
+
+    # Trin 2: kun én URL per host+kind — foretrækker den korteste/root-URL
+    # (så kristian-ideer.pages.dev/01.html kollapses med kristian-ideer.pages.dev/02)
+    from urllib.parse import urlparse
+    host_best = {}
+    for _, (u, k) in deduped.items():
+        try:
+            host = (urlparse(u).hostname or u).lower()
+        except Exception:
+            host = u.lower()
+        key = (host, k)
+        existing = host_best.get(key)
+        if existing is None or len(u) < len(existing[0]):
+            host_best[key] = (u, k)
+
+    return [{"kind": k, "url": u} for (u, k) in host_best.values()]
+
+
+def build_projects_index(sessions):
+    """Lav projekt-index med chat-antal og URLs."""
+    by_cwd = {}
+    for s in sessions:
+        # Normaliser cwd (fjern trailing slash)
+        cwd = (s.get("cwd") or "").rstrip("/")
+        s["cwd_norm"] = cwd
+        key = cwd or "__none__"
+        if key not in by_cwd:
+            by_cwd[key] = {
+                "cwd": cwd,
+                "name": s.get("project") or "(uden mappe)",
+                "chats": 0,
+                "urls": [],
+                "latest": "",
+            }
+        by_cwd[key]["chats"] += 1
+        latest = s.get("ended") or s.get("started") or ""
+        if latest > by_cwd[key]["latest"]:
+            by_cwd[key]["latest"] = latest
+
+    # Scan URLs (én gang per projekt)
+    for key, proj in by_cwd.items():
+        if proj["cwd"]:
+            proj["urls"] = scan_project_urls(proj["cwd"])
+
+    # Sortér efter seneste aktivitet
+    projects = sorted(by_cwd.values(), key=lambda p: p["latest"], reverse=True)
+    return projects
+
+
+# ───────── AI-titler ─────────
+def ai_title_and_summary(session, cache):
+    """Generér {title, summary} for en chat. Cacher per session-id."""
+    cache_key = f"{session['source']}:{session['id']}"
+    if cache_key in cache:
+        return cache[cache_key]
+
+    if not ANTHROPIC_KEY:
+        cache[cache_key] = {
+            "title": fallback_title(session["first_user"]),
+            "summary": "(AI ikke aktiveret — sæt ANTHROPIC_API_KEY)",
+        }
+        return cache[cache_key]
+
+    prompt = (
+        "Du får uddrag af en chat mellem en bruger og en AI-kodeassistent. "
+        "Lav et JSON-objekt med to felter:\n"
+        '  - "title": maks 6 ord, sigende — fx "Fixede sound-bug i Greenland-scene"\n'
+        '  - "summary": maks 2 sætninger der opsummerer hvad chatten handlede om\n\n'
+        "VIGTIGT om sprog: title OG summary skal være på SAMME sprog som "
+        "brugerens første besked. Hvis brugeren skriver på dansk → dansk titel/resumé. "
+        "Hvis brugeren skriver på engelsk → engelsk titel/resumé. Spejl det sprog brugeren bruger.\n\n"
+        "Svar KUN med rent JSON, ingen markdown-blokke.\n\n"
+        f"Projekt: {session['project']}\n"
+        f"Antal beskeder: {session['msg_count']}\n\n"
+        "Første brugerbesked:\n"
+        f"\"\"\"\n{session['first_user'][:PROMPT_PREVIEW_CHARS]}\n\"\"\""
+    )
+
+    body = json.dumps({
+        "model": MODEL,
+        "max_tokens": 300,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        # Find første { … } i tilfælde af at modellen alligevel skriver lidt rundt om
+        m = re.search(r"\{.*\}", text, re.S)
+        parsed = json.loads(m.group(0)) if m else json.loads(text)
+        result = {
+            "title": (parsed.get("title") or fallback_title(session["first_user"]))[:80],
+            "summary": (parsed.get("summary") or "").strip(),
+        }
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+        result = {
+            "title": fallback_title(session["first_user"]),
+            "summary": f"(AI-fejl: {type(e).__name__})",
+        }
+
+    cache[cache_key] = result
+    return result
+
+
+def fallback_title(text):
+    t = text.strip().splitlines()[0] if text.strip() else "(tom chat)"
+    return t[:60].rstrip() + ("…" if len(t) > 60 else "")
+
+
+def apply_cached_titles(sessions, cache, ext_labels=None):
+    """Sæt title/summary/pinned på hver session fra cachen (eller fallback).
+    Prioritering for title: user_title > extension-label > AI-titel > fallback.
+    user_cwd-override trumfer detekteret cwd (manuel flyt-til-projekt)."""
+    ext_labels = ext_labels or {}
+    for s in sessions:
+        key = f"{s['source']}:{s['id']}"
+        meta = cache.get(key, {})
+        ai_title = meta.get("title") or fallback_title(s["first_user"])
+        user_title = meta.get("user_title", "")
+        ext_label = ext_labels.get(key, "")
+        s["title"] = user_title or ext_label or ai_title
+        s["ai_title"] = ai_title
+        s["ext_label"] = ext_label
+        s["user_title"] = user_title
+        s["summary"] = meta.get("summary") or ""
+        s["pinned"] = bool(meta.get("pinned", False))
+        # Hvis brugeren manuelt har flyttet chatten til en anden projektmappe,
+        # respektér det — overskriver path-detektion
+        user_cwd = meta.get("user_cwd", "")
+        if user_cwd:
+            s["original_cwd"] = s.get("cwd", "")
+            s["cwd"] = user_cwd
+            s["project"] = project_name_from_cwd(user_cwd)
+            s["cwd_hint"] = ""
+            s["user_cwd"] = user_cwd
+        else:
+            hint = detect_subfolder_hint(s.get("cwd", ""), s.get("first_user", ""))
+            s["cwd_hint"] = hint or ""
+            s["user_cwd"] = ""
+
+
+def build_search_index(sessions):
+    """Saml alle beskeder pr. session til en stor søgbar streng.
+    Hentes via /api/search; sendes IKKE i /api/sessions (for stort)."""
+    index = {}
+    for s in sessions:
+        try:
+            msgs = render_chat_for_view(s)
+            joined = "\n".join(m["text"] for m in msgs)
+            # Komprimér whitespace, lowercase
+            joined = re.sub(r"\s+", " ", joined).lower()
+            index[f"{s['source']}:{s['id']}"] = joined[:120000]
+        except Exception:
+            index[f"{s['source']}:{s['id']}"] = ""
+    return index
+
+
+def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
+    # Initial fallback-titler så frontenden viser noget med det samme
+    apply_cached_titles(sessions, cache, ext_labels)
+
+    needed = [s for s in sessions if not cache.get(f"{s['source']}:{s['id']}")]
+    total = len(needed)
+    if total == 0:
+        if status_cb:
+            status_cb(f"Klar ({len(sessions)} chats)")
+        return sessions
+    if status_cb:
+        status_cb(f"AI-titler: 0/{total}")
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_AI_CALLS) as ex:
+        futures = {ex.submit(ai_title_and_summary, s, cache): s for s in needed}
+        for fut in as_completed(futures):
+            s = futures[fut]
+            done += 1
+            # Opdatér denne session live
+            meta = cache.get(f"{s['source']}:{s['id']}", {})
+            if meta:
+                s["title"] = meta.get("title") or s["title"]
+                s["summary"] = meta.get("summary") or s["summary"]
+            if done % 5 == 0 or done == total:
+                save_cache(cache)
+            if status_cb:
+                status_cb(f"AI-titler: {done}/{total}")
+    save_cache(cache)
+    return sessions
+
+
+# ───────── Chat-visning (resume + full) ─────────
+def render_chat_for_view(session):
+    """Hent og udtræk beskeder fra jsonl til visning i frontenden."""
+    msgs = parse_jsonl(Path(session["file"]))
+    out = []
+    if session["source"] == "claude":
+        for m in msgs:
+            msg = m.get("message") or {}
+            role = msg.get("role") or m.get("type")
+            if role not in ("user", "assistant"):
+                continue
+            text = extract_text_from_content(msg.get("content", ""))
+            if role == "user":
+                text = clean_user_text(text)
+                if not text or is_bootstrap_message(text):
+                    continue
+            if not text.strip():
+                continue
+            out.append({"role": role, "text": text, "ts": m.get("timestamp", "")})
+    else:  # codex
+        for m in msgs:
+            t = m.get("type")
+            p = m.get("payload", {}) if isinstance(m.get("payload"), dict) else {}
+            if t == "event_msg" and p.get("type") == "user_message":
+                txt = (p.get("message") or extract_text_from_content(p.get("content", ""))).strip()
+                txt = clean_user_text(txt)
+                if txt and not is_bootstrap_message(txt):
+                    out.append({"role": "user", "text": txt, "ts": m.get("timestamp", "")})
+            elif t == "event_msg" and p.get("type") == "agent_message":
+                txt = (p.get("message") or extract_text_from_content(p.get("content", ""))).strip()
+                if txt:
+                    out.append({"role": "assistant", "text": txt, "ts": m.get("timestamp", "")})
+    return out
+
+
+# ───────── HTTP-server ─────────
+def detect_subfolder_from_paths(cwd, msgs):
+    """Scan ALLE beskeder for filstier under cwd. Returnér den mest hyppige
+    undermappe hvis den nævnes >= 5 gange. Mere pålideligt end at gætte fra
+    første besked, fordi det dækker hele samtalen incl. tool-kald."""
+    if not cwd or not msgs:
+        return None
+    cwd_norm = cwd.rstrip("/") + "/"
+    pattern = re.compile(re.escape(cwd_norm) + r"([^/\s\"'`)<>]+)")
+    counts = {}
+    for m in msgs:
+        # Saml alt tekst-indhold til scanning
+        chunks = []
+        msg_obj = m.get("message") or {}
+        if msg_obj:
+            chunks.append(json.dumps(msg_obj, ensure_ascii=False))
+        payload = m.get("payload") if isinstance(m.get("payload"), dict) else None
+        if payload:
+            chunks.append(json.dumps(payload, ensure_ascii=False))
+        text = " ".join(chunks)
+        for match in pattern.findall(text):
+            if "." in match or len(match) < 2:
+                continue  # skip filer og 1-char-fragmenter
+            counts[match] = counts.get(match, 0) + 1
+    if not counts:
+        return None
+    top_folder, top_count = max(counts.items(), key=lambda x: x[1])
+    if top_count < 5:
+        return None
+    full_path = cwd_norm + top_folder
+    if Path(full_path).is_dir():
+        return full_path
+    return None
+
+
+def detect_subfolder_hint(cwd, first_user):
+    """Hvis chatten kører fra en mappe og første besked tydeligt peger på en
+    undermappe (fx 'find mappen X', '/X/' i en sti, 'i X-mappen'),
+    returnér den fulde sti til undermappen."""
+    if not cwd or not first_user:
+        return None
+    root = Path(cwd)
+    if not root.exists() or not root.is_dir():
+        return None
+    text_lower = first_user.lower()
+    candidates = []
+    try:
+        for child in root.iterdir():
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            name = child.name
+            n = name.lower()
+            if len(n) < 4:
+                continue
+            # Stærke signaler for at brugeren faktisk peger på den mappe
+            patterns = [
+                f"mappen {n}",         # "find mappen dagsrader"
+                f"{n}-mappen",         # "Dagsrader-mappen"
+                f"mappe {n}",          # "ny mappe Dagsrader"
+                f"i {n} ",             # "vi arbejder i Klaver"
+                f"i {n}/",             # path-style
+                f"/{n}/",              # i en sti
+                f"/{n} ",              # path med space efter
+                f"`{n}`",              # i backticks
+                f"'{n}'",              # i quotes
+                f'"{n}"',
+            ]
+            if any(p in text_lower for p in patterns):
+                candidates.append(child)
+    except Exception:
+        return None
+    if len(candidates) == 1:
+        return str(candidates[0])
+    return None
+
+
+def scan_extension_labels():
+    """Læs chat-titler direkte fra VS Code/Windsurf-extensionernes
+    workspace-storage. Returnér {source:id → label}."""
+    import sqlite3
+    labels = {}
+    storage_paths = [
+        HOME / "Library/Application Support/Code/User/workspaceStorage",
+        HOME / "Library/Application Support/Windsurf/User/workspaceStorage",
+        HOME / "Library/Application Support/Cursor/User/workspaceStorage",
+    ]
+    for base in storage_paths:
+        if not base.exists():
+            continue
+        for workspace_dir in base.iterdir():
+            db = workspace_dir / "state.vscdb"
+            if not db.exists():
+                continue
+            try:
+                conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+                cur = conn.cursor()
+                cur.execute("SELECT value FROM ItemTable WHERE key='agentSessions.model.cache'")
+                row = cur.fetchone()
+                conn.close()
+            except Exception:
+                continue
+            if not row:
+                continue
+            try:
+                sessions = json.loads(row[0])
+            except Exception:
+                continue
+            for s in sessions:
+                resource = s.get("resource", "")
+                label = (s.get("label") or "").strip()
+                if not resource or not label:
+                    continue
+                # claude-code:/<uuid>  eller  openai-codex://route/local/<uuid>
+                sess_id = resource.rstrip("/").split("/")[-1]
+                if "claude-code" in resource:
+                    labels[f"claude:{sess_id}"] = label
+                elif "openai-codex" in resource:
+                    labels[f"codex:{sess_id}"] = label
+    return labels
+
+
+# File extension → Prism.js language mapping
+EXT_TO_LANG = {
+    ".html": "markup", ".htm": "markup", ".svg": "markup", ".xml": "markup",
+    ".css": "css",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "tsx",
+    ".jsx": "jsx",
+    ".py": "python",
+    ".json": "json", ".webmanifest": "json",
+    ".md": "markdown",
+    ".sh": "bash", ".command": "bash", ".zsh": "bash",
+    ".toml": "toml",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".sql": "sql",
+    ".rs": "rust",
+    ".go": "go",
+    ".rb": "ruby",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".swift": "swift",
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp",
+    ".php": "php",
+    ".txt": "plaintext", ".log": "plaintext",
+    ".env": "bash",
+    ".gitignore": "bash",
+}
+
+
+def build_file_tree(root, max_depth=4, current_depth=0):
+    """Returnér en hierarkisk fil/mappe-struktur fra root.
+    Skipper skjulte filer, node_modules og lignende støj."""
+    if current_depth >= max_depth:
+        return []
+    items = []
+    skip_names = {"node_modules", "__pycache__", ".wrangler",
+                  ".DS_Store", ".workspaces", "logs", "Backups"}
+    try:
+        children = sorted(root.iterdir(),
+                         key=lambda p: (not p.is_dir(), p.name.lower()))
+    except Exception:
+        return []
+    for child in children:
+        if child.name in skip_names:
+            continue
+        if child.name.startswith(".") and child.name not in (".gitignore", ".env.example"):
+            continue
+        try:
+            if child.is_dir():
+                items.append({
+                    "name": child.name,
+                    "type": "dir",
+                    "path": str(child),
+                    "children": build_file_tree(child, max_depth, current_depth + 1),
+                })
+            else:
+                size = child.stat().st_size
+                items.append({
+                    "name": child.name,
+                    "type": "file",
+                    "path": str(child),
+                    "size": size,
+                    "ext": child.suffix.lower(),
+                })
+        except Exception:
+            continue
+    return items
+
+
+def get_local_ip():
+    """Find Mac'ens lokale IP på WiFi/LAN (for mobile preview)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+
+# Tilladte filtyper i /preview/-ruten (sikkerhed: ingen vilkårlige filer)
+_PREVIEW_EXTS = {
+    ".html", ".htm", ".css", ".js", ".mjs", ".json", ".xml", ".txt", ".md",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".avif",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".mp3", ".mp4", ".webm", ".wav", ".m4a", ".ogg",
+    ".map", ".webmanifest",
+}
+
+
+# Peacock-inspireret farvepalette — projekter får en stabil farve baseret på navn
+_PEACOCK_PALETTE = [
+    "#1e88e5",  # blue
+    "#43a047",  # green
+    "#e53935",  # red
+    "#ff8f00",  # orange
+    "#5e35b1",  # purple
+    "#00897b",  # teal
+    "#d81b60",  # pink
+    "#3949ab",  # indigo
+    "#8e24aa",  # light purple
+    "#00acc1",  # cyan
+    "#7cb342",  # lime
+    "#6d4c41",  # brown
+    "#546e7a",  # blue grey
+    "#f4511e",  # deep orange
+]
+
+
+def project_color(name):
+    """Returnér en stabil hex-farve for et projektnavn (samme navn = samme farve)."""
+    if not name:
+        return _PEACOCK_PALETTE[0]
+    h = sum(ord(c) for c in name)
+    return _PEACOCK_PALETTE[h % len(_PEACOCK_PALETTE)]
+
+
+def _darken_hex(hex_color, factor=0.78):
+    c = hex_color.lstrip("#")
+    r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+    return f"#{int(r*factor):02x}{int(g*factor):02x}{int(b*factor):02x}"
+
+
+def color_customizations(color):
+    """Beregn workbench.colorCustomizations for en farve."""
+    dark = _darken_hex(color, 0.78)
+    return {
+        "activityBar.activeBackground": color,
+        "activityBar.background": color,
+        "activityBar.foreground": "#ffffff",
+        "activityBar.inactiveForeground": "#ffffff99",
+        "activityBarBadge.background": "#FFC107",
+        "activityBarBadge.foreground": "#15202b",
+        "commandCenter.border": "#e7e7e7",
+        "sash.hoverBorder": color,
+        "statusBar.background": dark,
+        "statusBar.foreground": "#ffffff",
+        "statusBarItem.hoverBackground": color,
+        "statusBarItem.remoteBackground": dark,
+        "statusBarItem.remoteForeground": "#ffffff",
+        "titleBar.activeBackground": dark,
+        "titleBar.activeForeground": "#ffffff",
+        "titleBar.inactiveBackground": dark + "99",
+        "titleBar.inactiveForeground": "#ffffff99",
+    }
+
+
+WORKSPACES_DIR = HERE / ".workspaces"
+
+
+def get_project_workspace_file(workspace_root, project_name, color):
+    """Generér eller opdatér en .code-workspace fil per projekt.
+
+    Hvert projekt får sin egen workspace-identity. Det giver:
+      - VS Code åbner i NYT VINDUE per projekt (forskellig .code-workspace = forskellig identity)
+      - Per-projekt farve (settings inline i workspace-filen, ikke shared via .vscode/)
+      - Stadig Masterversioner som primær folder → Claude-historik virker
+
+    Filerne ligger i Chatoverblik/.workspaces/ — skjult for brugeren."""
+    try:
+        WORKSPACES_DIR.mkdir(exist_ok=True)
+    except Exception:
+        return None
+    safe_name = re.sub(r"[^a-zA-Z0-9_æøåÆØÅ-]", "_", project_name) or "default"
+    ws_file = WORKSPACES_DIR / f"{safe_name}.code-workspace"
+    workspace_data = {
+        "folders": [{"path": workspace_root}],
+        "settings": {
+            "peacock.color": color,
+            "workbench.colorCustomizations": color_customizations(color),
+            # Skip Welcome-fanen så chat-kommandoen kan tage fokus uden konflikt
+            "workbench.startupEditor": "none",
+        },
+    }
+    try:
+        ws_file.write_text(json.dumps(workspace_data, indent=2, ensure_ascii=False),
+                          encoding="utf-8")
+        return str(ws_file)
+    except Exception:
+        return None
+
+
+def find_workspace_root(cwd):
+    """Find nærmeste forælder-mappe der indeholder CLAUDE.md eller AGENTS.md.
+    Dette er den 'rigtige' workspace-root for Claude/Codex-extensionerne, så
+    de finder chat-historikken korrekt. Hvis ingen findes returneres cwd selv."""
+    try:
+        p = Path(cwd).resolve()
+    except Exception:
+        return cwd
+    while p != p.parent:
+        if (p / "CLAUDE.md").exists() or (p / "AGENTS.md").exists():
+            return str(p)
+        p = p.parent
+    return cwd
+
+
+def find_code_cli():
+    """Find VS Code CLI (`code`) — prøver typiske placeringer."""
+    candidates = [
+        "/usr/local/bin/code",
+        "/opt/homebrew/bin/code",
+        "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    ]
+    for c in candidates:
+        if Path(c).exists():
+            return c
+    try:
+        r = subprocess.run(["which", "code"], capture_output=True,
+                           text=True, timeout=2)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+STATE = {
+    "sessions": [], "projects": [], "loading": True,
+    "status": "Starter…", "cache": {}, "search_index": {},
+}
+
+
+def background_load():
+    cache = load_cache()
+    STATE["cache"] = cache
+    STATE["status"] = "Scanner Claude-chats…"
+    claude = scan_claude()
+    STATE["status"] = "Scanner Codex-chats…"
+    codex = scan_codex()
+    STATE["status"] = "Henter titler fra VS Code…"
+    ext_labels = scan_extension_labels()
+    STATE["ext_labels"] = ext_labels
+    all_sessions = claude + codex
+    all_sessions.sort(key=lambda s: s.get("ended") or s.get("started") or "", reverse=True)
+    apply_cached_titles(all_sessions, cache, ext_labels)
+    STATE["sessions"] = all_sessions
+    STATE["status"] = "Scanner projekter for live-URLs…"
+    STATE["projects"] = build_projects_index(all_sessions)
+    STATE["loading"] = False
+    STATE["status"] = f"Bygger søgeindeks…"
+    STATE["search_index"] = build_search_index(all_sessions)
+    STATE["status"] = f"Henter AI-titler ({len(all_sessions)} chats)…"
+    enrich_with_ai(all_sessions, cache,
+                   status_cb=lambda s: STATE.__setitem__("status", s),
+                   ext_labels=ext_labels)
+    STATE["status"] = f"Klar ({len(all_sessions)} chats)"
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        pass  # stille
+
+    def _is_external(self):
+        """True hvis requesten kommer fra ikke-localhost (fx en telefon på WiFi)."""
+        addr = self.client_address[0] if self.client_address else ""
+        return addr not in ("127.0.0.1", "::1", "localhost")
+
+    def _forbidden(self):
+        self.send_response(403)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("Adgang nægtet — Command Center er kun tilgængelig fra Mac'en\n"
+                        "selv. /preview/* er den eneste rute der kan tilgås udefra.".encode("utf-8"))
+
+    def _send_json(self, obj, status=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path, content_type):
+        body = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        # Tillad cache for static-assets, men ikke HTML (så reload ses)
+        if not content_type.startswith("text/html"):
+            self.send_header("Cache-Control", "public, max-age=300")
+        else:
+            self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_preview(self):
+        """Server filer fra en projektmappe under /preview/<base64-cwd>/<sti>."""
+        import base64, mimetypes
+        from urllib.parse import unquote
+        try:
+            rest = self.path[len("/preview/"):]
+            parts = rest.split("/", 1)
+            encoded = parts[0]
+            sub_path = unquote(parts[1]) if len(parts) > 1 else "index.html"
+            if not sub_path or sub_path.endswith("/"):
+                sub_path = (sub_path + "index.html").lstrip("/")
+            # Tilføj padding så base64-decoding altid virker
+            padded = encoded + "=" * (-len(encoded) % 4)
+            cwd = base64.urlsafe_b64decode(padded).decode("utf-8")
+        except Exception:
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        # Sikkerhed 1: cwd skal være kendt af appen (en eksisterende projektmappe)
+        valid_cwds = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
+        # Tillad også eksplicitte projekt-cwds fra projects-index
+        valid_cwds |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
+        if cwd.rstrip("/") not in valid_cwds:
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"Ukendt projekt-mappe")
+            return
+
+        # Sikkerhed 2: ingen path-traversal
+        base = Path(cwd).resolve()
+        try:
+            target = (base / sub_path).resolve()
+        except Exception:
+            self.send_response(400)
+            self.end_headers()
+            return
+        if not (target == base or str(target).startswith(str(base) + "/")):
+            self.send_response(403)
+            self.end_headers()
+            return
+
+        # Sikkerhed 3: kun whitelistede filtyper
+        if target.is_file() and target.suffix.lower() not in _PREVIEW_EXTS:
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(b"Filtypen kan ikke serveres")
+            return
+
+        if not target.exists() or not target.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        ctype, _ = mimetypes.guess_type(str(target))
+        if not ctype:
+            ctype = "application/octet-stream"
+        if target.suffix.lower() in (".html", ".htm"):
+            ctype = "text/html; charset=utf-8"
+        self._send_file(target, ctype)
+
+    def do_GET(self):
+        # Ekstern adgang: kun /preview/* — alt andet er forbudt
+        if self._is_external() and not self.path.startswith("/preview/"):
+            self._forbidden()
+            return
+
+        if self.path.startswith("/preview/"):
+            self._serve_preview()
+            return
+        if self.path == "/" or self.path.startswith("/index.html"):
+            self._send_file(INDEX_FILE, "text/html; charset=utf-8")
+            return
+        if self.path == "/icon.png":
+            icon = HERE / "icon.png"
+            if icon.exists():
+                self._send_file(icon, "image/png")
+                return
+        if self.path == "/favicon.ico" or self.path == "/favicon.png":
+            favicon = HERE / "favicon.png"
+            if favicon.exists():
+                self._send_file(favicon, "image/png")
+                return
+        if self.path == "/api/sessions":
+            self._send_json({
+                "loading": STATE["loading"],
+                "status": STATE["status"],
+                "sessions": STATE["sessions"],
+                "projects": STATE["projects"],
+            })
+            return
+        if self.path == "/api/projects":
+            self._send_json({"projects": STATE["projects"]})
+            return
+        if self.path.startswith("/api/file-tree"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            cwd = (qs.get("cwd") or [""])[0]
+            if not cwd or not Path(cwd).is_dir():
+                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+                return
+            # Sikkerhed: skal være under et kendt projekt eller Masterversioner
+            valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
+            valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
+            valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            cwd_norm = cwd.rstrip("/")
+            allowed = any(cwd_norm == r or cwd_norm.startswith(r + "/") for r in valid_roots)
+            if not allowed:
+                self._send_json({"ok": False, "error": "Mappen er ikke tilladt"}, 403)
+                return
+            tree = build_file_tree(Path(cwd), max_depth=4)
+            self._send_json({"ok": True, "tree": tree, "root": cwd})
+            return
+
+        if self.path.startswith("/api/file-content"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            file_path = (qs.get("path") or [""])[0]
+            if not file_path or not Path(file_path).is_file():
+                self._send_json({"ok": False, "error": "Fil findes ikke"}, 400)
+                return
+            # Sikkerhed: skal være under et kendt projekt eller Masterversioner
+            valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
+            valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
+            valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            try:
+                target = Path(file_path).resolve()
+            except Exception:
+                self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
+                return
+            target_str = str(target)
+            allowed = any(target_str.startswith(r + "/") for r in valid_roots)
+            if not allowed:
+                self._send_json({"ok": False, "error": "Filen er ikke tilladt"}, 403)
+                return
+            # Størrelses- og typebegrænsninger
+            size = target.stat().st_size
+            if size > 500_000:
+                self._send_json({"ok": False, "error": f"Filen er for stor ({size:,} bytes)"}, 400)
+                return
+            ext = target.suffix.lower()
+            lang = EXT_TO_LANG.get(ext, "plaintext")
+            try:
+                content = target.read_text(encoding="utf-8", errors="replace")
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"Kunne ikke læse: {e}"}, 500)
+                return
+            self._send_json({
+                "ok": True,
+                "path": target_str,
+                "size": size,
+                "language": lang,
+                "content": content,
+            })
+            return
+
+        if self.path == "/api/widgets":
+            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/WIDGETS.md")
+            if not widgets_file.exists():
+                self._send_json({"ok": True, "markdown": "", "exists": False})
+                return
+            try:
+                content = widgets_file.read_text(encoding="utf-8")
+                self._send_json({
+                    "ok": True,
+                    "markdown": content,
+                    "exists": True,
+                    "path": str(widgets_file),
+                })
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if self.path == "/api/all-folders":
+            # Alle umiddelbare undermapper i Masterversioner — inkl. tomme,
+            # så man kan flytte chats til mapper uden eksisterende chats
+            root = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            folders = []
+            if root.exists():
+                skip = {"node_modules", "__pycache__", ".wrangler",
+                       "Chatoverblik-dist", "cloudflare-backup-2026-05-13"}
+                for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                    if (child.is_dir() and not child.name.startswith(".")
+                            and child.name not in skip):
+                        folders.append({"name": child.name, "cwd": str(child)})
+            self._send_json({"folders": folders})
+            return
+        if self.path.startswith("/api/preview-info"):
+            import base64
+            from urllib.parse import urlparse, parse_qs, quote
+            qs = parse_qs(urlparse(self.path).query)
+            cwd = (qs.get("cwd") or [""])[0]
+            if not cwd or not Path(cwd).is_dir():
+                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+                return
+            base = Path(cwd)
+            # Find HTML-filer i roden + 1-2 niveauer dybt (mange projekter har widget/index.html)
+            html_files = []
+            for f in sorted(base.glob("*.html")):
+                html_files.append(f.name)
+            for sub in sorted(base.iterdir()):
+                if sub.is_dir() and not sub.name.startswith(".") and sub.name not in ("node_modules", "logs", "__pycache__", ".wrangler"):
+                    for f in sorted(sub.glob("*.html")):
+                        html_files.append(f"{sub.name}/{f.name}")
+                    for sub2 in sorted(sub.iterdir()):
+                        if sub2.is_dir() and not sub2.name.startswith("."):
+                            for f in sorted(sub2.glob("*.html"))[:3]:
+                                html_files.append(f"{sub.name}/{sub2.name}/{f.name}")
+            if not html_files:
+                self._send_json({"ok": False, "error": "Ingen HTML-fil fundet i projektet"}, 400)
+                return
+            # Foretrukken: index.html i rod, ellers widget/index.html, ellers første
+            preferred = ["index.html", "index.cms.html", "widget/index.html",
+                        "widget/index.cms.html", "mobile.html", "index.mobile.html"]
+            hf_set = set(html_files)
+            index_file = next((p for p in preferred if p in hf_set), html_files[0])
+            ip = get_local_ip()
+            encoded = base64.urlsafe_b64encode(cwd.rstrip("/").encode("utf-8")).decode("ascii").rstrip("=")
+            # URL-encode hver sti-komponent så filer med æ/ø/å og mellemrum virker
+            url_path = "/".join(quote(part) for part in index_file.split("/"))
+            url = f"http://{ip}:{PORT}/preview/{encoded}/{url_path}"
+            self._send_json({
+                "ok": True,
+                "ip": ip,
+                "port": PORT,
+                "url": url,
+                "encoded_cwd": encoded,
+                "default_file": index_file,
+                "html_files": html_files,
+            })
+            return
+        if self.path == "/api/workflow-analysis-cached":
+            analysis_file = HERE / "analysis.md"
+            if analysis_file.exists():
+                text = analysis_file.read_text(encoding="utf-8")
+                gen, model = "", ""
+                first_line = text.splitlines()[0] if text else ""
+                if first_line.startswith("<!-- "):
+                    meta = first_line.replace("<!--", "").replace("-->", "").strip()
+                    for part in meta.split("|"):
+                        part = part.strip()
+                        if part.startswith("Genereret:"):
+                            gen = part.replace("Genereret:", "").strip()
+                        elif part.startswith("Model:"):
+                            model = part.replace("Model:", "").strip()
+                    text = "\n".join(text.splitlines()[2:])
+                self._send_json({"ok": True, "markdown": text,
+                                "generated_at": gen, "model": model})
+            else:
+                self._send_json({"ok": False, "error": "Ingen analyse endnu"}, 404)
+            return
+        if self.path.startswith("/api/search"):
+            from urllib.parse import urlparse, parse_qs
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].lower().strip()
+            if len(q) < 2:
+                self._send_json({"matches": []})
+                return
+            matches = []
+            for key, body in STATE["search_index"].items():
+                idx = body.find(q)
+                if idx == -1:
+                    continue
+                # Snippet ~100 chars omkring fundet
+                start = max(0, idx - 40)
+                end = min(len(body), idx + 120)
+                snippet = body[start:end].strip()
+                if start > 0:
+                    snippet = "…" + snippet
+                if end < len(body):
+                    snippet = snippet + "…"
+                source, sess_id = key.split(":", 1)
+                matches.append({"source": source, "id": sess_id, "snippet": snippet})
+            self._send_json({"matches": matches})
+            return
+        if self.path.startswith("/api/chat/"):
+            # /api/chat/<source>/<id>
+            parts = self.path.split("/")
+            if len(parts) >= 5:
+                source, sess_id = parts[3], parts[4]
+                match = next((s for s in STATE["sessions"]
+                              if s["source"] == source and s["id"] == sess_id), None)
+                if match:
+                    self._send_json({"session": match, "messages": render_chat_for_view(match)})
+                    return
+            self._send_json({"error": "not found"}, 404)
+            return
+        self._send_json({"error": "unknown route"}, 404)
+
+    def do_POST(self):
+        if self._is_external():
+            self._forbidden()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except Exception:
+            data = {}
+
+        if self.path == "/api/open-in-windsurf":
+            # Routen hedder fortsat 'windsurf' af bagudkompatibilitetshensyn,
+            # men åbner nu VS Code.
+            cwd = data.get("cwd", "")
+            if not cwd or not Path(cwd).exists():
+                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+                return
+            source = data.get("source", "")
+            workspace_root = find_workspace_root(cwd)
+
+            # Find projektnavn til farvevalg + workspace-fil
+            project_name = Path(cwd).name if cwd != workspace_root else Path(workspace_root).name
+            color = project_color(project_name)
+            # Generér per-projekt .code-workspace fil — hvert projekt får sin
+            # egen identity, så VS Code åbner i nyt vindue, og hvert vindue har
+            # sin egen farve (ingen mere shared color via .vscode/settings.json)
+            ws_file = get_project_workspace_file(workspace_root, project_name, color)
+
+            mode = data.get("mode", "")
+            try:
+                code_cli = find_code_cli()
+                # Kommando-sekvens — kommando-IDer Kristian har verificeret
+                # findes i Command Palette
+                cmd_args = []
+                if mode == "new-chat":
+                    if source == "claude":
+                        # Claude eksponerer ikke en "New Conversation"-kommando
+                        # — vi åbner sidebaren og brugeren klikker "+" selv
+                        cmd_args += [
+                            "--command", "workbench.action.closeAllEditors",
+                            "--command", "claude-vscode.sidebar.open",
+                        ]
+                    elif source == "codex":
+                        # Codex eksponerer chatgpt.newChat som faktisk virker
+                        cmd_args += [
+                            "--command", "workbench.action.closeAllEditors",
+                            "--command", "chatgpt.openSidebar",
+                            "--command", "chatgpt.newChat",
+                        ]
+                else:
+                    if source == "claude":
+                        cmd_args += ["--command", "claude-vscode.sidebar.open"]
+                    elif source == "codex":
+                        cmd_args += ["--command", "chatgpt.openSidebar"]
+
+                # Åbn workspace-FILEN i stedet for folder. .code-workspace files
+                # giver VS Code en unik workspace-identity per projekt, så -n
+                # faktisk skaber et nyt vindue. Hver fil har sin egen farve inline.
+                target = ws_file if ws_file else workspace_root
+                args = [code_cli, "-n", target]
+                args.extend(cmd_args)
+
+                if code_cli:
+                    subprocess.Popen(args,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                else:
+                    fallback = [workspace_root]
+                    if file_to_open:
+                        fallback.append(file_to_open)
+                    subprocess.Popen(["open", "-a", "Visual Studio Code"] + fallback,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+
+                subprocess.Popen(["osascript", "-e",
+                                  'tell application "Visual Studio Code" to activate'])
+                self._send_json({"ok": True, "opened": workspace_root,
+                                "workspace_file": ws_file,
+                                "color": color, "project": project_name})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/workflow-analysis":
+            # Saml struktureret data — sortér nyeste først
+            from datetime import datetime, timezone
+            sorted_sessions = sorted(
+                STATE["sessions"],
+                key=lambda s: s.get("ended") or s.get("started") or "",
+                reverse=True,
+            )
+            now = datetime.now(timezone.utc)
+            chats_summary = []
+            for s in sorted_sessions:
+                started = s.get("started", "") or ""
+                days_ago = ""
+                try:
+                    dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    days_ago = (now - dt).days
+                except Exception:
+                    pass
+                chats_summary.append({
+                    "projekt": s.get("project", ""),
+                    "kilde": s.get("source", ""),
+                    "titel": s.get("title", "")[:120],
+                    "første_besked": (s.get("first_user", "") or "")[:600],
+                    "ai_resumé": s.get("summary", "")[:400],
+                    "antal_beskeder": s.get("msg_count", 0),
+                    "antal_brugerbeskeder": s.get("user_msg_count", 0),
+                    "dage_siden": days_ago,
+                    "startet": started[:10],
+                })
+            projects_summary = []
+            for p in STATE["projects"]:
+                projects_summary.append({
+                    "navn": p.get("name", ""),
+                    "antal_chats": p.get("chats", 0),
+                    "har_live_url": any(u.get("kind") == "live" for u in p.get("urls", [])),
+                    "har_repo": any(u.get("kind") == "repo" for u in p.get("urls", [])),
+                    "seneste_aktivitet": (p.get("latest", "") or "")[:10],
+                })
+
+            prompt = f"""Du er en ærlig, dygtig konsulent der analyserer en vibe-coders \
+workflow. Brugeren er Kristian Jensen — digital journalist på Politiken (Danmarks \
+største avis), baggrund i motion design og After Effects. Han bygger interaktive \
+widgets, spil og explainers til politiken.dk. Han skriver ikke kode selv — han \
+\"vibe-coder\" via AI-assistenter (Claude Code og Codex i VS Code/Windsurf).
+
+VIGTIG VÆGTNING: Chats er sorteret med NYESTE FØRST. Hvert chat har et "dage_siden"-felt. \
+Kristian har lært meget undervejs — derfor vægter du nyere chats højere end gamle, fordi \
+de afspejler hans nuværende kompetenceniveau. Gamle chats (>120 dage) bruges primært til \
+at vise UDVIKLING og hvad han er blevet bedre til, ikke som kritik af hans nuværende niveau.
+
+Her er data fra hans {len(chats_summary)} chats fordelt på {len(projects_summary)} projekter:
+
+PROJEKTER:
+{json.dumps(projects_summary, indent=2, ensure_ascii=False)}
+
+CHATS (nyeste først):
+{json.dumps(chats_summary, indent=2, ensure_ascii=False)}
+
+Lav en konkret, ærlig analyse i 5 sektioner. Brug markdown. Vær specifik med eksempler/citater \
+(citér korte uddrag i kursiv). Skriv på dansk. Pak ikke kritik ind i bomuld — men vær respektfuld.
+
+## 1. Mønstre i hvordan jeg formulerer projekter
+Hvad fungerer i hans nyere åbningsbeskeder? Er han blevet bedre over tid? \
+Hvor er han stadig vag eller savner info? Citér eksempler (markér gerne om eksemplet er nyt eller gammelt).
+
+## 2. Gentagende bugs og svage sider
+Hvilke tekniske emner/problemer dukker op igen og igen — også i de seneste chats? \
+Hvor bør han investere i at lære bedre? Skeln mellem "engang-problemer" og "stadig-aktuelle-problemer".
+
+## 3. Færdiggørelses-mønstre + tekniske valg
+Hvilke projekter går i mål (live URL) vs strander? Korrelation mellem dybde (beskeder) og succes? \
+Tekniske valg han gør igen og igen — over/underengineerer han nogle steder? \
+Er der ændringer i hans valg over tid?
+
+## 4. Hvad virker rigtig godt — ros og positive mønstre
+Hvad gør han særligt smart i de nyeste chats? Hvilke vaner bør han holde fast i? \
+Hvor er han stærkest? Hvilken læringskurve kan du se?
+
+## 5. Konkret to-do: 5-10 vaner at prøve i næste projekt
+Praktiske, handlingsbare anbefalinger der bygger på hvor han ER NU. Specifikke ting at prøve. \
+Ikke generiske råd. Hvis et råd kun gælder gamle vaner han allerede har fixet, så drop det.
+
+Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværende niveau og trajectory."""
+
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False,
+                    "error": "ANTHROPIC_API_KEY mangler — kan ikke køre analyse"}, 400)
+                return
+
+            model_choice = data.get("model", "claude-sonnet-4-6")
+            allowed = {"claude-sonnet-4-6", "claude-opus-4-8"}
+            if model_choice not in allowed:
+                model_choice = "claude-sonnet-4-6"
+            body = json.dumps({
+                "model": model_choice,
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=180) as resp:
+                    api_data = json.loads(resp.read().decode("utf-8"))
+                text = "".join(b.get("text", "") for b in api_data.get("content", [])
+                               if b.get("type") == "text")
+                # Gem til disk for re-visning (metadata i kommentar-linje)
+                analysis_file = HERE / "analysis.md"
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                analysis_file.write_text(
+                    f"<!-- Genereret: {ts} | Model: {model_choice} -->\n\n{text}",
+                    encoding="utf-8"
+                )
+                self._send_json({"ok": True, "markdown": text,
+                                "generated_at": ts, "model": model_choice})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/project-handover":
+            # Genererer "sådan genoptager du dette projekt"-guide
+            cwd = data.get("cwd", "")
+            project_name = data.get("project", "")
+            if not cwd or not Path(cwd).is_dir():
+                self._send_json({"ok": False, "error": "Mappe findes ikke"}, 400)
+                return
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
+                return
+            # Saml kontekst om projektet
+            proj_path = Path(cwd)
+            ctx_files = {}
+            for fname in ("STATUS.md", "README.md", "LESSONS.md", "AGENT_BRIEF.md",
+                          "WORKFLOW_ANCHORS.md", "AI_INDEX.md"):
+                p = proj_path / fname
+                if p.exists() and p.is_file():
+                    try:
+                        ctx_files[fname] = p.read_text(encoding="utf-8", errors="replace")[:5000]
+                    except Exception:
+                        pass
+            # Top-level filer i mappen
+            try:
+                file_list = [f.name for f in sorted(proj_path.iterdir())
+                            if not f.name.startswith(".")][:40]
+            except Exception:
+                file_list = []
+            # Chats for projektet (relevante uddrag)
+            proj_chats = [s for s in STATE["sessions"]
+                         if (s.get("cwd") or "").rstrip("/") == cwd.rstrip("/")]
+            chat_summary = []
+            for s in sorted(proj_chats,
+                          key=lambda x: x.get("ended") or x.get("started") or "",
+                          reverse=True)[:15]:
+                chat_summary.append({
+                    "titel": s.get("title", "")[:120],
+                    "resumé": s.get("summary", "")[:300],
+                    "antal_beskeder": s.get("msg_count", 0),
+                    "startet": (s.get("started", "") or "")[:10],
+                })
+
+            ctx_text = "\n\n".join(f"### {fname}\n```\n{content}\n```"
+                                   for fname, content in ctx_files.items())
+            prompt = f"""Lav en kompakt "genoptag-guide" til et projekt — en kort manual \
+en ny person (eller jeg selv om 3 måneder) kan læse på 2 minutter for at forstå projektet \
+og komme i gang.
+
+PROJEKT: {project_name}
+MAPPE: {cwd}
+
+FILER I MAPPEN:
+{json.dumps(file_list, ensure_ascii=False)}
+
+EKSISTERENDE KONTEKST-FILER:
+{ctx_text if ctx_text else '(ingen)'}
+
+SENESTE CHATS (nyeste først):
+{json.dumps(chat_summary, indent=2, ensure_ascii=False)}
+
+Lav en markdown-guide med disse sektioner. Skriv på dansk. Vær KONKRET — citater fra chats \
+og filnavne er bedre end abstrakt beskrivelse.
+
+## Hvad er dette projekt?
+1-2 sætninger der fanger essensen. Ikke generelle floskler.
+
+## Status lige nu
+Hvor langt er det? Hvad virker, hvad mangler? Live URL hvis sat.
+
+## Sådan kommer du i gang igen
+Trin-for-trin: hvilke filer skal du åbne, hvilke kommandoer skal du køre, \
+hvor starter en typisk arbejdsdag.
+
+## Nøglefiler og hvad de gør
+3-6 vigtigste filer, hver med 1 linje om hvad de er.
+
+## Vigtige tekniske valg
+Beslutninger du skal kende for ikke at gå imod dem ved et uheld.
+
+## Faldgruber
+Subtle ting (iOS-quirks, deploy-fælder, font-loading) hentet fra LESSONS.md \
+eller chats hvis nævnt.
+
+## Næste skridt
+1-3 konkrete punkter at gå videre med. Citér evt. STATUS.md hvis relevant.
+
+Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
+
+            model_choice = data.get("model", "claude-sonnet-4-6")
+            allowed = {"claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"}
+            if model_choice not in allowed:
+                model_choice = "claude-sonnet-4-6"
+            body = json.dumps({
+                "model": model_choice,
+                "max_tokens": 2500,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=body,
+                headers={"Content-Type": "application/json",
+                         "x-api-key": ANTHROPIC_KEY,
+                         "anthropic-version": "2023-06-01"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    api_data = json.loads(resp.read().decode("utf-8"))
+                text = "".join(b.get("text", "") for b in api_data.get("content", [])
+                               if b.get("type") == "text")
+                # Gem som HANDOVER.md i projektmappen
+                handover_file = proj_path / "HANDOVER.md"
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                handover_file.write_text(
+                    f"<!-- Genereret af Chatoverblik: {ts} | Model: {model_choice} -->\n\n{text}",
+                    encoding="utf-8"
+                )
+                self._send_json({"ok": True, "markdown": text,
+                                "generated_at": ts, "model": model_choice,
+                                "file": str(handover_file)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/weekly-retro":
+            # Workflow-analyse begrænset til sidste 7 dage
+            from datetime import datetime, timezone, timedelta
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            recent = [s for s in STATE["sessions"]
+                     if (s.get("ended") or s.get("started") or "") >= cutoff]
+            if not recent:
+                self._send_json({"ok": False, "error": "Ingen chats sidste 7 dage"}, 400)
+                return
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
+                return
+            recent.sort(key=lambda s: s.get("ended") or s.get("started") or "",
+                       reverse=True)
+            chat_data = []
+            for s in recent:
+                chat_data.append({
+                    "projekt": s.get("project", ""),
+                    "titel": s.get("title", "")[:120],
+                    "første_besked": (s.get("first_user", "") or "")[:400],
+                    "resumé": s.get("summary", "")[:300],
+                    "antal_beskeder": s.get("msg_count", 0),
+                    "antal_brugerbeskeder": s.get("user_msg_count", 0),
+                    "dato": (s.get("started", "") or "")[:10],
+                })
+            prompt = f"""Lav en kort ugentlig retrospektiv baseret på Kristians sidste 7 \
+dages chats. Han er digital journalist på Politiken, vibe-coder. \
+Total: {len(recent)} chats.
+
+CHATS:
+{json.dumps(chat_data, indent=2, ensure_ascii=False)}
+
+Lav en kompakt rapport (max 600 ord) i markdown med disse sektioner. \
+Vær konkret, kort, ærlig. Skriv på dansk.
+
+## Ugens overblik
+- Antal aktive projekter, hvilke
+- Hvor brugte du mest tid?
+- Største fremskridt
+
+## Hvad gik godt
+2-3 konkrete sejre fra ugen
+
+## Hvor sad du fast
+2-3 ting der trak energi eller ikke kom videre
+
+## Næste uge — fokus
+2-3 konkrete forslag til hvad du bør prioritere
+
+## En enkelt observation
+En ting der overraskede dig i mønstrene"""
+
+            model_choice = data.get("model", "claude-sonnet-4-6")
+            allowed = {"claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"}
+            if model_choice not in allowed:
+                model_choice = "claude-sonnet-4-6"
+            body = json.dumps({
+                "model": model_choice,
+                "max_tokens": 2000,
+                "messages": [{"role": "user", "content": prompt}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=body,
+                headers={"Content-Type": "application/json",
+                         "x-api-key": ANTHROPIC_KEY,
+                         "anthropic-version": "2023-06-01"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=90) as resp:
+                    api_data = json.loads(resp.read().decode("utf-8"))
+                text = "".join(b.get("text", "") for b in api_data.get("content", [])
+                               if b.get("type") == "text")
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                self._send_json({"ok": True, "markdown": text,
+                                "generated_at": ts, "model": model_choice,
+                                "chat_count": len(recent)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/new-project":
+            name = (data.get("name") or "").strip()
+            ptype = (data.get("type") or "").strip()
+            if not name or not re.match(r"^[A-Za-zÆØÅæøå0-9 _-]+$", name):
+                self._send_json({"ok": False,
+                    "error": "Ugyldigt navn (kun bogstaver, tal, mellemrum, _ og -)"}, 400)
+                return
+            if ptype not in ("arbejde", "privat"):
+                self._send_json({"ok": False, "error": "Type skal være 'arbejde' eller 'privat'"}, 400)
+                return
+            base = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner") / name
+            if base.exists():
+                self._send_json({"ok": False, "error": f"Mappen findes allerede: {base}"}, 400)
+                return
+            try:
+                base.mkdir(parents=True)
+                # STATUS.md fra skabelon
+                template = (Path("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+                           / "STATUS.template.md")
+                status_text = template.read_text(encoding="utf-8") if template.exists() else ""
+                status_text = (status_text
+                              .replace("<PROJEKTNAVN>", name)
+                              .replace("arbejde | privat", ptype)
+                              .replace("ÅÅÅÅ-MM-DD", time.strftime("%Y-%m-%d")))
+                (base / "STATUS.md").write_text(status_text, encoding="utf-8")
+                # README.md
+                (base / "README.md").write_text(
+                    f"# {name}\n\nKort beskrivelse her.\n\nSe STATUS.md for igangværende status.\n",
+                    encoding="utf-8")
+                # .gitignore
+                (base / ".gitignore").write_text(
+                    ".DS_Store\nnode_modules/\n*.log\n.wrangler/\n",
+                    encoding="utf-8")
+                # Tom index.html som start
+                (base / "index.html").write_text(
+                    f"<!DOCTYPE html>\n<html lang=\"da\">\n<head>\n  <meta charset=\"utf-8\">\n"
+                    f"  <title>{name}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                    f"</head>\n<body>\n  <h1>{name}</h1>\n</body>\n</html>\n",
+                    encoding="utf-8")
+                self._send_json({"ok": True, "path": str(base)})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/widgets":
+            # POST: gem WIDGETS.md
+            content = data.get("markdown", "")
+            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/WIDGETS.md")
+            try:
+                # Backup gammel version
+                if widgets_file.exists():
+                    backup = widgets_file.with_suffix(".md.bak")
+                    backup.write_text(widgets_file.read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+                widgets_file.write_text(content, encoding="utf-8")
+                self._send_json({"ok": True, "saved_at": time.strftime("%Y-%m-%d %H:%M")})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/delete":
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            # Find session
+            match = next((s for s in STATE["sessions"]
+                          if s["source"] == source and s["id"] == sess_id), None)
+            if not match:
+                self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
+                return
+            file_path = Path(match["file"])
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                # Fjern fra in-memory state
+                STATE["sessions"] = [s for s in STATE["sessions"]
+                                     if not (s["source"] == source and s["id"] == sess_id)]
+                STATE["search_index"].pop(f"{source}:{sess_id}", None)
+                STATE["cache"].pop(f"{source}:{sess_id}", None)
+                save_cache(STATE["cache"])
+                # Genopbyg projekt-index så chat-tællingen er korrekt
+                STATE["projects"] = build_projects_index(STATE["sessions"])
+                self._send_json({"ok": True})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/pin":
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            pinned = bool(data.get("pinned"))
+            key = f"{source}:{sess_id}"
+            cache = STATE["cache"]
+            entry = cache.get(key) or {}
+            if pinned:
+                entry["pinned"] = True
+            else:
+                entry.pop("pinned", None)
+            cache[key] = entry
+            save_cache(cache)
+            for s in STATE["sessions"]:
+                if s["source"] == source and s["id"] == sess_id:
+                    s["pinned"] = pinned
+                    break
+            self._send_json({"ok": True, "pinned": pinned})
+            return
+
+        if self.path == "/api/open-in-finder":
+            cwd = data.get("cwd", "")
+            if not cwd or not Path(cwd).exists():
+                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+                return
+            try:
+                subprocess.Popen(["open", cwd])
+                self._send_json({"ok": True})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        if self.path == "/api/regenerate-title":
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            session = next((s for s in STATE["sessions"]
+                            if s["source"] == source and s["id"] == sess_id), None)
+            if not session:
+                self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
+                return
+            cache = STATE["cache"]
+            key = f"{source}:{sess_id}"
+            # Bevar evt. user_title (manuel omdøbning) men fjern AI-felter
+            user_title = (cache.get(key) or {}).get("user_title", "")
+            pinned = (cache.get(key) or {}).get("pinned", False)
+            cache.pop(key, None)
+            result = ai_title_and_summary(session, cache)
+            # Genindsæt user-overrides
+            entry = cache.get(key) or {}
+            if user_title: entry["user_title"] = user_title
+            if pinned: entry["pinned"] = True
+            cache[key] = entry
+            save_cache(cache)
+            # Opdatér i memory
+            session["ai_title"] = result.get("title", "")
+            session["summary"] = result.get("summary", "")
+            if not user_title:
+                session["title"] = session["ai_title"]
+            self._send_json({"ok": True, "title": result.get("title"), "summary": result.get("summary")})
+            return
+
+        if self.path == "/api/move-chat":
+            # Flyt en chat til en anden projektmappe — gemmer user_cwd-override
+            # i cache.json uden at røre selve .jsonl-filen
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            target_cwd = (data.get("target_cwd") or "").rstrip("/")
+            if not target_cwd or not Path(target_cwd).is_dir():
+                self._send_json({"ok": False, "error": "Mål-mappen findes ikke"}, 400)
+                return
+            key = f"{source}:{sess_id}"
+            cache = STATE["cache"]
+            entry = cache.get(key) or {}
+            entry["user_cwd"] = target_cwd
+            cache[key] = entry
+            save_cache(cache)
+            # Opdatér i memory: cwd + project + cwd_hint
+            for s in STATE["sessions"]:
+                if s["source"] == source and s["id"] == sess_id:
+                    s["original_cwd"] = s.get("original_cwd") or s.get("cwd", "")
+                    s["cwd"] = target_cwd
+                    s["project"] = project_name_from_cwd(target_cwd)
+                    s["cwd_hint"] = ""  # afslå path-detekteret hint, brugeren har bestemt
+                    s["user_cwd"] = target_cwd
+                    break
+            # Genopbyg projekt-indekset så optællingen er korrekt
+            STATE["projects"] = build_projects_index(STATE["sessions"])
+            self._send_json({"ok": True,
+                            "project": project_name_from_cwd(target_cwd)})
+            return
+
+        if self.path == "/api/rename":
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            new_title = (data.get("title") or "").strip()[:120]
+            key = f"{source}:{sess_id}"
+            cache = STATE["cache"]
+            entry = cache.get(key) or {}
+            if new_title:
+                entry["user_title"] = new_title
+            else:
+                # Tom titel = nulstil til AI-titel
+                entry.pop("user_title", None)
+            cache[key] = entry
+            save_cache(cache)
+            # Opdater i memory-state også
+            for s in STATE["sessions"]:
+                if s["source"] == source and s["id"] == sess_id:
+                    s["user_title"] = new_title
+                    s["title"] = new_title or s.get("ai_title") or fallback_title(s["first_user"])
+                    break
+            self._send_json({"ok": True, "title": new_title})
+            return
+
+        if self.path == "/api/open-in-terminal":
+            cwd = data.get("cwd", "")
+            cmd = data.get("cmd", "")
+            if not cwd:
+                self._send_json({"ok": False, "error": "Mangler cwd"}, 400)
+                return
+            script = f'tell application "Terminal"\n  activate\n  do script "cd {json.dumps(cwd)[1:-1]} && {cmd}"\nend tell'
+            try:
+                subprocess.Popen(["osascript", "-e", script])
+                self._send_json({"ok": True})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
+        self._send_json({"error": "unknown route"}, 404)
+
+
+def main():
+    # Start scanning + AI-titler i baggrunden
+    threading.Thread(target=background_load, daemon=True).start()
+    print(f"\n  Chatoverblik kører på  →  http://localhost:{PORT}\n")
+    print("  (Stop med Ctrl+C)\n")
+    # Åbn browseren automatisk
+    try:
+        subprocess.Popen(["open", f"http://localhost:{PORT}"])
+    except Exception:
+        pass
+    try:
+        # 0.0.0.0 så telefoner på samme WiFi kan tilgå /preview/-ruten.
+        # Sikkerhed: do_GET/do_POST checker self._is_external() og
+        # tillader KUN /preview/* udadtil — alle andre API-kald nægtes.
+        with http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler) as httpd:
+            httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nLukker.")
+
+
+if __name__ == "__main__":
+    main()

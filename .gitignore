@@ -1,0 +1,22 @@
+# Cache og auto-genererede filer
+cache.json
+analysis.md
+logs/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Workspace-filer per projekt (auto-genereres)
+.workspaces/
+
+# Backup-filer fra WIDGETS.md-editor
+*.md.bak
+
+# Test-output
+/tmp/
+
+# API-key gemt af install-script
+.env
+
+# Webp/PNG ikon-source (binær, kan gen-genereres)
+CommandCenter_SCR_Game1.webp

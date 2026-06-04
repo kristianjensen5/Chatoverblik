@@ -1,0 +1,2736 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<title>Command Center · Claude + Codex</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" sizes="1024x1024" href="/icon.png">
+<link rel="apple-touch-icon" sizes="512x512" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<meta name="apple-mobile-web-app-title" content="Command Center">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+<style>
+  @import url("https://use.typekit.net/zoh6esy.css");
+
+  @font-face {
+    font-family: "FlamaSemiCondensed";
+    src: url("https://politiken.dk/assets/fonts/flama/semicondensed/basic/FlamaSemicondensed-Basic-Pol.woff") format("woff");
+    font-weight: 400; font-style: normal; font-display: swap;
+  }
+  @font-face {
+    font-family: "FlamaSemiCondensed";
+    src: url("https://politiken.dk/assets/fonts/flama/semicondensed/medium/FlamaSemicond-Medium-Pol.woff2") format("woff2");
+    font-weight: 700; font-style: normal; font-display: swap;
+  }
+
+  :root {
+    --ui-font: "Flama", "FlamaSemiCondensed", "Helvetica Neue", Arial, sans-serif;
+    --display-font: "Capitoleum", "Capitolium", Georgia, "Times New Roman", serif;
+
+    --bg: #f6f4ee;
+    --panel: #ffffff;
+    --sidebar: #efece4;
+    --ink: #1a1a1a;
+    --muted: #6b6963;
+    --line: #e6e2d8;
+    --line-strong: #cfc9b9;
+    --accent: #b30000;
+    --accent-soft: #f3dcdc;
+    --claude: #d97757;
+    --codex: #1a6b50;
+    --live: #1a6b50;
+    --repo: #555;
+    --radius: 6px;
+    --sidebar-w: 280px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--ui-font);
+    font-size: 14px;
+    line-height: 1.45;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ───── Layout: sidebar + main ───── */
+  .app {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) 1fr;
+    height: 100vh;
+  }
+
+  /* ───── Sidebar ───── */
+  aside.sidebar {
+    background: var(--sidebar);
+    border-right: 1px solid var(--line-strong);
+    overflow-y: auto;
+    padding: 16px 0 40px;
+  }
+  .sidebar h1 {
+    font-family: var(--display-font);
+    font-weight: 400;
+    font-size: 22px;
+    margin: 0 18px 4px;
+    letter-spacing: -0.01em;
+  }
+  .sidebar .status {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 18px 14px;
+  }
+  .sidebar .status.busy::after {
+    content: "";
+    display: inline-block;
+    width: 7px; height: 7px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: 1px;
+    animation: pulse 1.2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
+
+  /* Server health badge med Command Center-billede */
+  .server-health {
+    margin: 0 18px 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    transition: background 200ms;
+  }
+  .server-health .cc-icon {
+    width: 40px;
+    height: 40px;
+    background-image: url('/icon.png');
+    background-size: cover;
+    background-position: center;
+    border-radius: 8px;
+    flex-shrink: 0;
+    transition: filter 300ms;
+  }
+  .server-health .health-label {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .server-health .health-label .title {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .server-health .health-label .sub {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* ALIVE — Command Center'en glør med pulserende rødt lys */
+  .server-health.alive {
+    background: #eef3ee;
+    color: #1a6b50;
+  }
+  .server-health.alive .cc-icon {
+    animation: cc-lights-blink 2.2s ease-in-out infinite;
+  }
+  @keyframes cc-lights-blink {
+    0%, 100% {
+      filter: brightness(1) saturate(1);
+    }
+    50% {
+      filter: brightness(1.12) saturate(1.5)
+              drop-shadow(0 0 6px rgba(220, 40, 40, 0.7))
+              drop-shadow(0 0 12px rgba(220, 40, 40, 0.4));
+    }
+  }
+
+  /* BUSY — gul tint, langsommere puls */
+  .server-health.busy {
+    background: #fff7e0;
+    color: #8a6500;
+  }
+  .server-health.busy .cc-icon {
+    filter: sepia(0.5) saturate(1.4) hue-rotate(-15deg);
+    animation: cc-busy-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes cc-busy-pulse {
+    0%, 100% { filter: sepia(0.5) saturate(1.4) hue-rotate(-15deg) brightness(0.95); }
+    50% { filter: sepia(0.5) saturate(1.4) hue-rotate(-15deg) brightness(1.15); }
+  }
+
+  /* DEAD — gråt og dødt, ingen animation */
+  .server-health.dead {
+    background: #f9e3e3;
+    color: #8a0000;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .server-health.dead .top-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-weight: 700;
+  }
+  .server-health.dead .cc-icon {
+    filter: grayscale(1) brightness(0.7);
+  }
+  .server-health.dead .help {
+    font-size: 11px;
+    color: #8a0000;
+    line-height: 1.4;
+  }
+  .server-health.dead code {
+    background: rgba(0,0,0,0.06);
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 11px;
+  }
+
+  .sidebar .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 18px 18px 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .sidebar .section-label select {
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    padding: 2px 4px;
+    cursor: pointer;
+  }
+  .sidebar .section-label select:hover { color: var(--ink); border-color: var(--ink); }
+
+  .proj-list { list-style: none; padding: 0; margin: 0; }
+  .proj-list li.section-divider {
+    padding: 14px 18px 4px;
+    cursor: default;
+    background: transparent !important;
+    border-left: none !important;
+  }
+  .proj-list li.section-divider:hover { background: transparent !important; }
+  .proj-list .section-label-mini {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .proj-list li {
+    padding: 10px 18px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background 100ms, border-color 100ms;
+  }
+  .proj-list li:hover { background: rgba(0,0,0,0.04); }
+  .proj-list li.active {
+    background: #fff;
+    border-left-color: var(--accent);
+  }
+  .proj-list .proj-name {
+    font-weight: 500;
+    font-size: 13px;
+    margin-bottom: 2px;
+    word-break: break-word;
+  }
+  .proj-list .proj-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .proj-list .url-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .proj-list .proj-actions {
+    display: flex; gap: 4px;
+    margin-top: 6px;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .proj-list li:hover .proj-actions { opacity: 1; }
+  .proj-list .proj-actions button {
+    font: inherit; font-size: 10px;
+    font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+    border-radius: 3px;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+  .proj-list .proj-actions button:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+    background: #fff;
+  }
+  .url-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 3px;
+    color: #fff;
+    text-decoration: none;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+  .url-chip.live { background: var(--live); }
+  .url-chip.repo { background: var(--repo); }
+  .url-chip:hover { filter: brightness(1.1); }
+
+  .sidebar-tools {
+    margin: 8px 18px 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .overview-details {
+    margin: 6px 0 0;
+  }
+  .overview-details > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 8px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+  }
+  .overview-details > summary::-webkit-details-marker { display: none; }
+  .overview-details > summary:hover { background: rgba(0,0,0,0.04); }
+  .overview-details > summary .overview-arrow::after {
+    content: "▸";
+    font-size: 11px;
+    color: var(--muted);
+    transition: transform 120ms;
+    display: inline-block;
+  }
+  .overview-details[open] > summary .overview-arrow::after {
+    content: "▾";
+  }
+  .overview-details > summary .section-label-mini {
+    margin: 0;
+  }
+  .sidebar-tool-btn {
+    font: inherit;
+    font-size: 13px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 12px;
+    background: #fff;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    cursor: pointer;
+    color: var(--ink);
+    margin-bottom: 6px;
+    display: block;
+  }
+  .sidebar-tool-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Analyse-modal */
+  .analysis-content {
+    font-family: var(--ui-font);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  .analysis-content h1, .analysis-content h2 {
+    font-family: var(--display-font);
+    font-weight: 400;
+    margin-top: 22px;
+    margin-bottom: 10px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+  }
+  .analysis-content h1 { font-size: 24px; }
+  .analysis-content h2 { font-size: 19px; }
+  .analysis-content h3 { font-size: 16px; font-weight: 700; margin-top: 16px; margin-bottom: 6px; }
+  .analysis-content p { margin: 8px 0; }
+  .analysis-content ul, .analysis-content ol { margin: 8px 0; padding-left: 22px; }
+  .analysis-content li { margin: 4px 0; }
+  .analysis-content em {
+    font-style: italic;
+    color: #555;
+    background: #fef9ed;
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+  .analysis-content strong { color: var(--ink); }
+  .analysis-content code {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background: #f0ede4;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .analysis-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .analysis-meta button {
+    font: inherit;
+    font-size: 12px;
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--muted);
+  }
+  .analysis-meta button:hover { border-color: var(--accent); color: var(--accent); }
+  .analysis-loading {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--display-font);
+    font-size: 16px;
+  }
+  .analysis-loading::after {
+    content: "";
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    margin-left: 8px;
+    vertical-align: 1px;
+    animation: pulse 1.2s infinite;
+  }
+
+  /* ───── Main ───── */
+  main.main {
+    overflow-y: auto;
+    padding: 0;
+  }
+  .topbar {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    padding: 14px clamp(16px, 3vw, 32px);
+    display: grid;
+    grid-template-columns: 1fr auto auto auto auto auto;
+    gap: 10px;
+    align-items: center;
+  }
+  .topbar .fold-toggle {
+    font: inherit; font-size: 12px;
+    padding: 7px 12px;
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .topbar .fold-toggle:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+  .topbar input[type="search"] {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+    font: inherit;
+  }
+  .topbar select {
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #fff;
+    font: inherit;
+  }
+  .topbar .clear-filter {
+    font: inherit; font-size: 12px;
+    padding: 7px 10px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    display: none;
+  }
+  .topbar .clear-filter.show { display: inline-block; }
+  .topbar .clear-filter:hover { background: var(--accent); }
+
+  .content { padding: 18px clamp(16px, 3vw, 32px) 60px; }
+
+  .filter-banner {
+    margin-bottom: 16px;
+    font-family: var(--display-font);
+    font-size: 20px;
+    color: var(--ink);
+  }
+  .filter-banner small {
+    font-family: var(--ui-font);
+    font-size: 12px;
+    color: var(--muted);
+    margin-left: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* Chat liste — kompakte rækker */
+  .chat-list { display: grid; gap: 8px; }
+
+  .chat {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: auto auto 1fr auto auto auto;
+    gap: 14px;
+    align-items: center;
+    transition: border-color 120ms;
+  }
+  .chat .delete-btn {
+    background: none; border: none;
+    font-size: 14px; cursor: pointer;
+    padding: 4px 6px;
+    color: var(--muted);
+    opacity: 0;
+    transition: opacity 120ms, color 120ms;
+  }
+  .chat:hover .delete-btn { opacity: 0.6; }
+  .chat .delete-btn:hover { color: var(--accent); opacity: 1; }
+  .chat.pinned { background: #fffbe9; border-color: #e8d893; }
+  .chat .pin-btn {
+    background: none; border: none;
+    font-size: 16px; cursor: pointer;
+    padding: 2px 4px; color: #cdc7b3;
+    line-height: 1;
+  }
+  .chat .pin-btn:hover { color: #d4a017; }
+  .chat .pin-btn.active { color: #d4a017; opacity: 1; }
+  .chat .pin-btn:not(.active) { opacity: 0; }
+  .chat:hover .pin-btn { opacity: 0.6; }
+  .chat:hover .pin-btn:hover { opacity: 1; }
+  .chat:hover .pin-btn.active { opacity: 1; }
+  .chat .snippet {
+    grid-column: 3;
+    font-family: var(--display-font);
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-style: italic;
+    line-height: 1.4;
+  }
+  .chat .snippet mark {
+    background: #fff3b0; color: var(--ink);
+    padding: 0 2px; font-style: normal;
+  }
+  .chat:hover { border-color: var(--accent); }
+  .chat .badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 3px;
+    color: #fff;
+    min-width: 60px;
+    text-align: center;
+  }
+  .chat .badge.claude { background: var(--claude); }
+  .chat .badge.codex { background: var(--codex); }
+  .chat .title {
+    font-size: 15px;
+    font-weight: 500;
+    margin: 0 0 2px;
+    word-break: break-word;
+  }
+  .chat .title.edited::before { content: "✎ "; color: var(--accent); font-size: 12px; }
+  .chat .meta {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chat .meta .sep { margin: 0 6px; opacity: 0.5; }
+  .chat .rename-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 4px 6px;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .chat:hover .rename-btn { opacity: 1; }
+  .chat .rename-btn:hover { color: var(--accent); }
+  .chat .arrow { color: var(--muted); font-size: 18px; }
+  .chat:hover .arrow { color: var(--accent); }
+
+  /* Sammenfoldelige grupper i hovedlisten */
+  .project-group { margin-bottom: 20px; }
+  .project-group > summary {
+    list-style: none;
+    cursor: pointer;
+    font-family: var(--display-font);
+    font-weight: 400;
+    font-size: 19px;
+    margin: 0 0 10px;
+    color: var(--ink);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    user-select: none;
+  }
+  .project-group > summary::-webkit-details-marker { display: none; }
+  .project-group > summary::before {
+    content: "▾";
+    font-size: 12px;
+    color: var(--muted);
+    transition: transform 120ms;
+    display: inline-block;
+    width: 12px;
+  }
+  .project-group:not([open]) > summary::before { content: "▸"; }
+  .project-group > summary:hover { color: var(--accent); }
+  .project-group > summary:hover::before { color: var(--accent); }
+  .project-group .count {
+    font-family: var(--ui-font);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .project-group .proj-header-name { flex: 0 1 auto; }
+  .project-group .url-chip {
+    font-family: var(--ui-font);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 3px;
+    color: #fff;
+    text-decoration: none;
+    line-height: 1;
+    text-transform: uppercase;
+    margin-left: 4px;
+  }
+  .project-group .url-chip.live { background: var(--live); }
+  .project-group .url-chip.repo { background: var(--repo); }
+  .project-group .url-chip:hover { filter: brightness(1.1); }
+  .project-group .url-chip-more {
+    display: inline-block;
+    font-family: var(--ui-font);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 3px;
+    background: transparent;
+    border: 1px dashed var(--line-strong);
+    color: var(--muted);
+    margin-left: 4px;
+    cursor: help;
+    line-height: 1;
+  }
+  .project-group .proj-header-actions {
+    margin-left: auto;
+    display: inline-flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .project-group:hover .proj-header-actions { opacity: 1; }
+  .project-group .proj-header-actions button {
+    font: inherit;
+    font-family: var(--ui-font);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--muted);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .project-group .proj-header-actions button:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+
+  /* Modal */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(20,18,14,0.55);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 100;
+    padding: 40px 20px;
+    overflow-y: auto;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--panel);
+    border-radius: 8px;
+    width: min(900px, 100%);
+    padding: 28px 32px 32px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    position: relative;
+  }
+  .modal .close {
+    position: absolute;
+    top: 14px; right: 18px;
+    background: none; border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--muted);
+    line-height: 1;
+  }
+  .modal .close:hover { color: var(--ink); }
+
+  .modal .modal-title-row {
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .modal .modal-title-row h2 {
+    flex: 1;
+    font-family: var(--display-font);
+    font-weight: 400;
+    font-size: 26px;
+    margin: 0 0 6px;
+    padding-right: 0;
+    line-height: 1.2;
+  }
+  .modal .modal-title-row .rename-btn {
+    background: none; border: 1px solid var(--line);
+    border-radius: 4px; cursor: pointer; color: var(--muted);
+    font-size: 12px; padding: 4px 8px;
+    flex-shrink: 0;
+    margin-top: 4px;
+  }
+  .modal .modal-title-row .rename-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .modal .modal-title-row input.rename-input {
+    flex: 1;
+    font-family: var(--display-font);
+    font-size: 24px;
+    border: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: 0;
+    background: #fff;
+  }
+  .modal .modal-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 18px;
+  }
+  .modal .modal-meta .badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #fff;
+    margin-right: 6px;
+  }
+  .modal .modal-meta .badge.claude { background: var(--claude); }
+  .modal .modal-meta .badge.codex  { background: var(--codex); }
+
+  .modal .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 6px;
+  }
+  .modal .summary {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    border-radius: 0 4px 4px 0;
+    font-family: var(--display-font);
+    font-size: 16px;
+    line-height: 1.5;
+    margin-bottom: 22px;
+  }
+  .modal .find-reveal {
+    margin-top: 14px;
+    padding: 14px;
+    background: #f6f4ee;
+    border: 1px dashed var(--line-strong);
+    border-radius: 6px;
+  }
+  .modal .find-reveal .label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  .modal .find-reveal .first-msg-box {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-family: var(--display-font);
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--ink);
+    margin-bottom: 10px;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .modal .find-reveal .copy-btn {
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    font: inherit;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .modal .find-reveal .copy-btn:hover { background: var(--accent); }
+  .modal .find-reveal .reveal-hint {
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .modal .find-reveal .reveal-hint strong { color: var(--ink); }
+  .modal .find-reveal .reveal-hint kbd {
+    background: rgba(0,0,0,0.08);
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+  }
+  .modal .find-reveal .find-strategy {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .modal .find-reveal .find-strategy:first-of-type {
+    border-top: none;
+    padding-top: 0;
+  }
+  .modal .find-reveal .find-strategy-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .modal .find-reveal .find-strategy-body {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+  .modal .find-reveal .find-strategy-body strong { color: var(--ink); }
+  .modal .find-reveal .time-chip {
+    display: inline-block;
+    background: var(--accent);
+    color: #ffffff !important;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0 4px;
+    letter-spacing: 0.02em;
+    text-shadow: 0 1px 0 rgba(0,0,0,0.15);
+  }
+
+  .modal .resume-hint {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  .modal .resume-hint .copy-first {
+    background: transparent;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    margin-left: 6px;
+  }
+  .modal .resume-hint .copy-first:hover {
+    border-color: var(--ink);
+    color: var(--ink);
+  }
+  .modal .resume-hint details {
+    border: none !important;
+    padding: 0 !important;
+    margin: 4px 0 0 !important;
+    display: inline-block;
+  }
+  .modal .resume-hint summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-weight: normal !important;
+  }
+  .modal .resume-hint summary:hover { color: var(--ink); }
+  .modal .resume-hint .first-msg {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: #f6f4ee;
+    border: 1px dashed var(--line-strong);
+    border-radius: 4px;
+    font-family: var(--display-font);
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--ink);
+    max-height: 80px;
+    overflow-y: auto;
+  }
+
+  .modal .cwd-line {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 14px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    word-break: break-all;
+    line-height: 1.6;
+  }
+  .modal .cwd-line .hint-link {
+    margin-left: 10px;
+    color: #b88a00;
+    cursor: pointer;
+    font-family: var(--ui-font);
+    font-size: 12px;
+    background: transparent;
+    border: 1px solid #d4a017;
+    padding: 1px 8px;
+    border-radius: 3px;
+    text-decoration: none;
+  }
+  .modal .cwd-line .hint-link:hover {
+    background: #d4a017; color: #fff;
+  }
+
+  .modal .actions {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    margin-bottom: 22px;
+  }
+  .modal .actions button {
+    font: inherit; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.02em; padding: 9px 16px;
+    border: 1px solid var(--line); background: #fff;
+    border-radius: var(--radius); cursor: pointer;
+    color: var(--ink);
+  }
+  .modal .actions button.primary {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .modal .actions button:hover {
+    border-color: var(--accent); color: var(--accent);
+  }
+  .modal .actions button.primary:hover {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+
+  .modal details {
+    border-top: 1px solid var(--line);
+    padding-top: 14px; margin-top: 10px;
+  }
+  .modal details summary {
+    cursor: pointer; font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); user-select: none;
+  }
+  .modal details summary:hover { color: var(--ink); }
+
+  /* Code browser modal */
+  .code-browser {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 16px;
+    height: 70vh;
+    margin-top: 8px;
+  }
+  .code-browser .file-tree {
+    background: #f6f4ee;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px 8px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  .code-browser .file-tree ul {
+    list-style: none;
+    padding: 0 0 0 14px;
+    margin: 0;
+  }
+  .code-browser .file-tree > ul {
+    padding-left: 0;
+  }
+  .code-browser .file-tree li {
+    padding: 2px 0;
+    line-height: 1.4;
+    cursor: pointer;
+    user-select: none;
+  }
+  .code-browser .file-tree li.dir > span {
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .code-browser .file-tree li.dir > span::before {
+    content: "▸ ";
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .code-browser .file-tree li.dir.open > span::before {
+    content: "▾ ";
+  }
+  .code-browser .file-tree li.dir:not(.open) > ul {
+    display: none;
+  }
+  .code-browser .file-tree li.file {
+    color: var(--ink);
+  }
+  .code-browser .file-tree li.file::before {
+    content: "  ";
+  }
+  .code-browser .file-tree li.file:hover {
+    color: var(--accent);
+  }
+  .code-browser .file-tree li.file.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 3px;
+    padding-left: 4px;
+    margin-left: -4px;
+  }
+  .code-browser .file-viewer {
+    background: #2d2d2d;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .code-browser .file-meta {
+    background: #1d1d1d;
+    color: #e6e6e6;
+    padding: 8px 14px;
+    font-size: 11px;
+    font-family: ui-monospace, Menlo, monospace;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .code-browser .file-meta .lang-tag {
+    background: rgba(255,255,255,0.1);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .code-browser .file-content {
+    flex: 1;
+    overflow: auto;
+    margin: 0;
+    background: #2d2d2d;
+  }
+  .code-browser .file-content pre {
+    margin: 0 !important;
+    padding: 14px 16px !important;
+    background: #2d2d2d !important;
+    font-family: ui-monospace, Menlo, "SF Mono", monospace !important;
+    font-size: 12px !important;
+    line-height: 1.55 !important;
+    border-radius: 0 !important;
+  }
+  .code-browser .file-content code {
+    font-family: ui-monospace, Menlo, "SF Mono", monospace !important;
+    font-size: 12px !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+  .code-browser .empty-viewer {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #aaa;
+    font-family: var(--display-font);
+    font-size: 14px;
+    padding: 40px;
+    text-align: center;
+  }
+
+  .messages { margin-top: 14px; display: grid; gap: 12px; }
+  .msg {
+    border-left: 3px solid var(--line);
+    padding: 8px 0 8px 14px;
+    font-size: 14px;
+  }
+  .msg.user { border-left-color: var(--accent); }
+  .msg.assistant { border-left-color: var(--muted); }
+  .msg .role {
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin-bottom: 4px;
+  }
+  .msg .text {
+    font-family: var(--display-font);
+    white-space: pre-wrap; word-break: break-word;
+    line-height: 1.5; color: var(--ink);
+    max-height: 260px; overflow-y: auto;
+  }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--ink); color: #fff;
+    padding: 10px 18px; border-radius: var(--radius);
+    font-size: 13px; opacity: 0;
+    transition: transform 200ms, opacity 200ms;
+    z-index: 200; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .empty {
+    padding: 60px 0; text-align: center;
+    color: var(--muted); font-family: var(--display-font);
+    font-size: 18px;
+  }
+
+  @media (max-width: 800px) {
+    .app { grid-template-columns: 1fr; }
+    aside.sidebar { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sidebar">
+    <h1>Command Center</h1>
+    <div id="server-health" class="server-health alive">
+      <span class="dot"></span>
+      <span id="health-text">Server live</span>
+    </div>
+    <div id="status" class="status busy">Indlæser…</div>
+
+    <div class="sidebar-tools">
+      <div class="section-label-mini" style="margin-bottom:8px;">Værktøjer</div>
+      <button id="btn-new-project" class="sidebar-tool-btn">🆕 Nyt projekt</button>
+      <button id="btn-widgets" class="sidebar-tool-btn">📚 Komponent-bibliotek</button>
+      <button id="btn-weekly-retro" class="sidebar-tool-btn">📅 Ugens retro</button>
+      <button id="btn-analysis" class="sidebar-tool-btn">📊 Analyse af mit workflow</button>
+    </div>
+
+    <ul class="proj-list" id="proj-favorites">
+      <!-- Favoritter rendered af JS -->
+    </ul>
+
+    <details class="overview-details" id="overview-details">
+      <summary>
+        <span class="section-label-mini">Chat-oversigt</span>
+        <span class="overview-arrow"></span>
+      </summary>
+      <ul class="proj-list" id="proj-list">
+        <!-- Alle chats, Korte chats, Aktivitet rendered af JS -->
+      </ul>
+    </details>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <input id="search" type="search" placeholder="Søg i titler, projekter og resuméer…" autofocus>
+      <select id="filter-source">
+        <option value="all">Alle kilder</option>
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+      </select>
+      <select id="group-by" title="Gruppér chats efter">
+        <option value="project">Gruppér: Projekt</option>
+        <option value="time">Gruppér: Tid</option>
+      </select>
+      <select id="sort">
+        <option value="recent">Senest aktive</option>
+        <option value="created">Senest oprettet</option>
+        <option value="oldest">Ældste først</option>
+        <option value="long">Længste chats</option>
+      </select>
+      <button id="fold-toggle" class="fold-toggle" title="Fold alle grupper ud/sammen">Fold alle ud</button>
+      <button id="clear-filter" class="clear-filter">Vis alle</button>
+    </div>
+
+    <div class="content">
+      <div id="filter-banner" class="filter-banner" style="display:none;"></div>
+      <div id="grid">
+        <div class="empty">Henter chats…</div>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<div id="modal-bg" class="modal-bg" role="dialog" aria-modal="true">
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const state = {
+  sessions: [],
+  projects: [],
+  loading: true,
+  status: "",
+  search: "",
+  filter: "all",
+  sort: "recent",
+  groupBy: "project",   // "project" | "time"
+  openGroups: new Set(),    // hvilke grupper er åbne — bevares ved re-renders
+  overviewOpen: false,      // sidebarens "Chat-oversigt" fold-tilstand
+  projSort: "recent",
+  selectedCwd: "",
+  showOnlyPinned: false,
+  showOnlyShort: false,
+  activityWindow: "",    // "" | "today" | "yesterday" | "thisweek" | "older"
+  bodyMatches: {},
+  searchInBody: true,
+};
+
+const $ = (id) => document.getElementById(id);
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d)) return "—";
+  return d.toLocaleDateString("da-DK", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function fmtRelative(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const diffH = (Date.now() - d.getTime()) / 3.6e6;
+  if (diffH < 1)  return Math.max(1, Math.round(diffH * 60)) + " min siden";
+  if (diffH < 24) return Math.round(diffH) + " timer siden";
+  const days = Math.round(diffH / 24);
+  if (days < 7)  return days + " dage siden";
+  if (days < 60) return Math.round(days / 7) + " uger siden";
+  return Math.round(days / 30) + " mdr. siden";
+}
+
+// Matcher VS Codes Past Conversations format ("10m", "23h", "2d")
+function fmtVSCodeRelative(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const mins = (Date.now() - d.getTime()) / 60000;
+  if (mins < 60)   return Math.max(1, Math.round(mins)) + "m";
+  if (mins < 1440) return Math.round(mins / 60) + "h";
+  return Math.round(mins / 1440) + "d";
+}
+
+function escapeHTML(s) {
+  return (s || "").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+function shortHost(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./, "");
+  } catch { return url; }
+}
+
+async function loadSessions() {
+  try {
+    const r = await fetch("/api/sessions");
+    const data = await r.json();
+    state.sessions = data.sessions || [];
+    state.projects = data.projects || [];
+    state.loading  = data.loading;
+    state.status   = data.status;
+    setServerHealth(data.loading ? "busy" : "alive");
+    renderSidebar();
+    renderGrid();
+  } catch (e) {
+    state.status = "Server svarer ikke";
+    setServerHealth("dead");
+    renderSidebar();
+  }
+}
+
+function setServerHealth(state) {
+  const el = $("server-health");
+  if (!el) return;
+  el.classList.remove("alive", "busy", "dead");
+  el.classList.add(state);
+  if (state === "alive") {
+    el.innerHTML = `
+      <div class="cc-icon"></div>
+      <div class="health-label">
+        <span class="title">Server live</span>
+        <span class="sub">localhost:7777</span>
+      </div>`;
+  } else if (state === "busy") {
+    el.innerHTML = `
+      <div class="cc-icon"></div>
+      <div class="health-label">
+        <span class="title">Server arbejder</span>
+        <span class="sub">Scanner/indekserer</span>
+      </div>`;
+  } else {
+    el.innerHTML = `
+      <div class="top-row">
+        <div class="cc-icon"></div>
+        <div class="health-label">
+          <span class="title">Server kører ikke</span>
+          <span class="sub">Ingen forbindelse</span>
+        </div>
+      </div>
+      <div class="help">
+        Dobbeltklik <code>start.command</code> i Chatoverblik-mappen.
+        Når terminal-vinduet åbner, vil denne badge skifte til grøn
+        igen automatisk inden for få sekunder.
+      </div>`;
+  }
+}
+
+function renderSidebar() {
+  $("status").textContent = state.status;
+  $("status").classList.toggle("busy",
+    state.loading || /scanner|titler|henter|bygger/i.test(state.status));
+
+  const list = $("proj-list");
+  const favList = $("proj-favorites");
+  const total = state.sessions.length;
+  const pinnedCount = state.sessions.filter(s => s.pinned).length;
+  const shortCount = state.sessions.filter(s => (s.user_msg_count || 0) <= 2).length;
+
+  // Aktivitets-buckets
+  const buckets = { today: 0, yesterday: 0, thisweek: 0, older: 0 };
+  for (const s of state.sessions) {
+    buckets[activityBucket(s.ended || s.started)] += 1;
+  }
+  const thisWeekTotal = buckets.today + buckets.yesterday + buckets.thisweek;
+
+  // ─── Favoritter (separat liste, altid synlig) ───
+  if (favList) {
+    favList.innerHTML = `
+      <li data-cwd="" data-mode="pinned" class="${state.showOnlyPinned ? "active" : ""}">
+        <div class="proj-name">★ Favoritter</div>
+        <div class="proj-meta">${pinnedCount} ${pinnedCount === 1 ? "chat" : "chats"}</div>
+      </li>
+    `;
+  }
+
+  // ─── Chat-oversigt (sammenfoldelig) ───
+  const isAllActive = !state.showOnlyPinned && !state.showOnlyShort
+                      && !state.activityWindow && state.selectedCwd === "";
+  const items = [`
+    <li data-cwd="" data-mode="all" class="${isAllActive ? "active" : ""}">
+      <div class="proj-name">Alle chats</div>
+      <div class="proj-meta">${total} chats samlet</div>
+    </li>
+    <li data-cwd="" data-mode="short" class="${state.showOnlyShort ? "active" : ""}">
+      <div class="proj-name">🧹 Korte chats</div>
+      <div class="proj-meta">${shortCount} med ≤2 beskeder</div>
+    </li>
+  `];
+  items.push(`<li class="section-divider"><div class="section-label-mini">Aktivitet</div></li>`);
+  const actRows = [
+    { id: "today",     label: "I dag",       count: buckets.today },
+    { id: "yesterday", label: "I går",       count: buckets.yesterday },
+    { id: "thisweek",  label: "Denne uge",   count: thisWeekTotal },
+    { id: "older",     label: "Tidligere",   count: buckets.older },
+  ];
+  for (const a of actRows) {
+    if (a.count === 0 && a.id !== "today") continue;
+    const active = state.activityWindow === a.id ? "active" : "";
+    items.push(`
+      <li data-cwd="" data-mode="activity" data-window="${a.id}" class="${active}">
+        <div class="proj-name">${a.label}</div>
+        <div class="proj-meta">${a.count} ${a.count === 1 ? "chat" : "chats"}</div>
+      </li>
+    `);
+  }
+  list.innerHTML = items.join("");
+
+  // Sæt fold-tilstanden fra state ved hver render
+  const ovDetails = $("overview-details");
+  if (ovDetails) ovDetails.open = !!state.overviewOpen;
+
+  // Klik-handlere på BÅDE favoritter-listen og oversigts-listen
+  const allItems = [
+    ...(favList ? favList.querySelectorAll("li") : []),
+    ...list.querySelectorAll("li"),
+  ];
+  allItems.forEach(li => {
+    if (li.classList.contains("section-divider")) return;
+    li.addEventListener("click", (e) => {
+      if (e.target.closest(".proj-actions")) return;
+      state.showOnlyPinned = false;
+      state.showOnlyShort = false;
+      state.activityWindow = "";
+      state.selectedCwd = "";
+      const mode = li.dataset.mode;
+      if (mode === "pinned") state.showOnlyPinned = true;
+      else if (mode === "short") state.showOnlyShort = true;
+      else if (mode === "activity") state.activityWindow = li.dataset.window;
+      else if (mode === "project") state.selectedCwd = li.dataset.cwd;
+      savePrefs();
+      renderSidebar();
+      renderGrid();
+    });
+  });
+
+}
+
+function activityBucket(iso) {
+  if (!iso) return "older";
+  const d = new Date(iso);
+  if (isNaN(d)) return "older";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYday = new Date(startOfToday); startOfYday.setDate(startOfYday.getDate() - 1);
+  const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfWeek.getDate() - 6);
+  if (d >= startOfToday) return "today";
+  if (d >= startOfYday)  return "yesterday";
+  if (d >= startOfWeek)  return "thisweek";
+  return "older";
+}
+
+function filterAndSort() {
+  let xs = state.sessions.slice();
+  if (state.showOnlyPinned) {
+    xs = xs.filter(s => s.pinned);
+  } else if (state.showOnlyShort) {
+    xs = xs.filter(s => (s.user_msg_count || 0) <= 2);
+  } else if (state.activityWindow) {
+    xs = xs.filter(s => {
+      const b = activityBucket(s.ended || s.started);
+      if (state.activityWindow === "thisweek") {
+        return b === "today" || b === "yesterday" || b === "thisweek";
+      }
+      return b === state.activityWindow;
+    });
+  } else if (state.selectedCwd !== "") {
+    xs = xs.filter(s => (s.cwd || "").replace(/\/+$/, "") === state.selectedCwd);
+  }
+  if (state.filter !== "all") xs = xs.filter(s => s.source === state.filter);
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    xs = xs.filter(s => {
+      const inMeta =
+        (s.title || "").toLowerCase().includes(q) ||
+        (s.summary || "").toLowerCase().includes(q) ||
+        (s.project || "").toLowerCase().includes(q) ||
+        (s.first_user || "").toLowerCase().includes(q);
+      const inBody = !!state.bodyMatches[`${s.source}:${s.id}`];
+      return inMeta || inBody;
+    });
+  }
+  switch (state.sort) {
+    case "oldest":  xs.sort((a,b) => (a.started||"").localeCompare(b.started||"")); break;
+    case "created": xs.sort((a,b) => (b.started||"").localeCompare(a.started||"")); break;
+    case "long":    xs.sort((a,b) => (b.msg_count||0) - (a.msg_count||0)); break;
+    default:        xs.sort((a,b) => (b.ended||b.started||"").localeCompare(a.ended||a.started||""));
+  }
+  // Pin altid øverst (medmindre vi allerede er på Favoritter)
+  if (!state.showOnlyPinned) {
+    xs.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+  }
+  return xs;
+}
+
+function renderGrid() {
+  const xs = filterAndSort();
+  const grid = $("grid");
+  const banner = $("filter-banner");
+  const clearBtn = $("clear-filter");
+
+  // Banner viser hvilket filter vi er på
+  const activityLabels = {
+    today: "I dag", yesterday: "I går",
+    thisweek: "Denne uge", older: "Tidligere",
+  };
+  let bannerLabel = "";
+  if (state.showOnlyPinned)       bannerLabel = "★ Favoritter";
+  else if (state.showOnlyShort)   bannerLabel = "🧹 Korte chats (≤2 beskeder)";
+  else if (state.activityWindow)  bannerLabel = activityLabels[state.activityWindow] || "";
+  else if (state.selectedCwd) {
+    const proj = state.projects.find(p => p.cwd === state.selectedCwd);
+    bannerLabel = proj ? proj.name : state.selectedCwd;
+  }
+
+  if (bannerLabel) {
+    banner.innerHTML = `${escapeHTML(bannerLabel)} <small>${xs.length} chat${xs.length === 1 ? "" : "s"}</small>`;
+    banner.style.display = "";
+    clearBtn.classList.add("show");
+  } else {
+    banner.style.display = "none";
+    clearBtn.classList.remove("show");
+  }
+
+  if (!xs.length) {
+    grid.innerHTML = `<div class="empty">${state.loading ? "Henter chats…" : "Ingen chats matcher."}</div>`;
+    return;
+  }
+
+  // Når et filter er aktivt eller der søges/sorteres på "long": flad liste.
+  // Ellers: gruppér efter valgt mode (projekt / tid).
+  const isFlat = state.selectedCwd || state.showOnlyPinned || state.showOnlyShort
+      || state.activityWindow || state.search || state.sort === "long";
+  $("fold-toggle").style.display = isFlat ? "none" : "";
+
+  if (isFlat) {
+    grid.innerHTML = `<div class="chat-list">${xs.map(chatRow).join("")}</div>`;
+  } else if (state.groupBy === "time") {
+    const buckets = { today: [], yesterday: [], thisweek: [], older: [] };
+    for (const s of xs) {
+      buckets[activityBucket(s.ended || s.started)].push(s);
+    }
+    const order = [
+      { id: "today",     label: "I dag" },
+      { id: "yesterday", label: "I går" },
+      { id: "thisweek",  label: "Denne uge" },
+      { id: "older",     label: "Tidligere" },
+    ];
+    grid.innerHTML = order
+      .filter(b => buckets[b.id].length)
+      .map(b => {
+        const gid = "time:" + b.id;
+        const isOpen = state.openGroups.has(gid);
+        return `
+        <details class="project-group" data-gid="${gid}" ${isOpen ? "open" : ""}>
+          <summary>${b.label} <span class="count">${buckets[b.id].length} ${buckets[b.id].length === 1 ? "chat" : "chats"}</span></summary>
+          <div class="chat-list">${buckets[b.id].map(chatRow).join("")}</div>
+        </details>`;
+      }).join("");
+  } else {
+    // Gruppér efter projekt
+    const groups = new Map();
+    for (const s of xs) {
+      const k = s.project || "(uden mappe)";
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    }
+    const projInfo = new Map();
+    for (const p of state.projects) projInfo.set(p.name, p);
+    // Parent-projekter (hvis et andet projekts cwd har dette som prefix)
+    // får ikke URL-chips, da deres URLs typisk er ophobet fra README-filer
+    // der nævner alle subprojekters deployments.
+    const isParentProject = (info) => {
+      if (!info || !info.cwd) return false;
+      const prefix = info.cwd.replace(/\/+$/, "") + "/";
+      return state.projects.some(q => q !== info && q.cwd && q.cwd.startsWith(prefix));
+    };
+
+    grid.innerHTML = [...groups.entries()].map(([proj, items]) => {
+      const info = projInfo.get(proj);
+      const showUrls = info && !isParentProject(info);
+      let urlsArr = showUrls ? (info.urls || []) : [];
+      if (urlsArr.length > 0) {
+        // Sortér: URLs der matcher projektnavnet kommer først
+        const projKey = proj.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 5);
+        urlsArr = urlsArr.slice().sort((a, b) => {
+          const aMatch = projKey.length >= 3 && a.url.toLowerCase().includes(projKey);
+          const bMatch = projKey.length >= 3 && b.url.toLowerCase().includes(projKey);
+          return (bMatch ? 1 : 0) - (aMatch ? 1 : 0);
+        });
+      }
+      const maxChips = 3;
+      const extraCount = Math.max(0, urlsArr.length - maxChips);
+      const urls = urlsArr.slice(0, maxChips).map(u => `
+        <a class="url-chip ${u.kind}" href="${escapeHTML(u.url)}" target="_blank"
+           rel="noopener" title="${escapeHTML(u.url)}"
+           onclick="event.stopPropagation();">
+          ${u.kind === "live" ? "↗ Live" : "GitHub"}
+        </a>`).join("") + (extraCount > 0
+          ? `<span class="url-chip-more" title="${urlsArr.slice(maxChips).map(u => u.url).join('\n')}">+${extraCount}</span>`
+          : "");
+      const cwd = items[0]?.cwd || "";
+      const projActions = cwd ? `
+        <span class="proj-header-actions" onclick="event.stopPropagation();">
+          <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Genoptag-guide">📖 Genoptag</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="browse-files" data-project="${escapeHTML(proj)}" title="Browse filer i Command Center">📄 Filer</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="mobile-preview" data-project="${escapeHTML(proj)}" title="Mobile preview med QR">📱 Preview</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="open-ws" title="Åbn i VS Code">↗ VS Code</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="open-finder" title="Vis i Finder">📁 Finder</button>
+        </span>` : "";
+      const gid = "project:" + proj;
+      const isOpen = state.openGroups.has(gid);
+      return `
+        <details class="project-group" data-gid="${gid}" ${isOpen ? "open" : ""}>
+          <summary>
+            <span class="proj-header-name">${escapeHTML(proj)}</span>
+            <span class="count">${items.length} ${items.length === 1 ? "chat" : "chats"}</span>
+            ${urls}
+            ${projActions}
+          </summary>
+          <div class="chat-list">${items.map(chatRow).join("")}</div>
+        </details>
+      `;
+    }).join("");
+  }
+
+  // Bevar åbnings-tilstand i state.openGroups når brugeren klikker
+  grid.querySelectorAll("details.project-group").forEach(d => {
+    d.addEventListener("toggle", () => {
+      const gid = d.dataset.gid;
+      if (!gid) return;
+      if (d.open) state.openGroups.add(gid);
+      else state.openGroups.delete(gid);
+      savePrefs();
+      updateFoldToggleLabel();
+    });
+  });
+  updateFoldToggleLabel();
+
+  grid.querySelectorAll(".chat").forEach(el => {
+    el.addEventListener("click", (e) => {
+      if (e.target.classList.contains("rename-btn")) return;
+      if (e.target.classList.contains("pin-btn")) return;
+      if (e.target.classList.contains("delete-btn")) return;
+      openChat(el.dataset.source, el.dataset.id);
+    });
+  });
+  grid.querySelectorAll(".rename-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const row = btn.closest(".chat");
+      inlineRename(row.dataset.source, row.dataset.id);
+    });
+  });
+  grid.querySelectorAll(".delete-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const row = btn.closest(".chat");
+      const source = row.dataset.source;
+      const id = row.dataset.id;
+      const s = state.sessions.find(x => x.source === source && x.id === id);
+      if (!s) return;
+      const title = s.title || "(uden titel)";
+      const ok = confirm(
+        `Slet chatten "${title}"?\n\n` +
+        `Dette sletter den underliggende .jsonl-fil permanent.\n` +
+        `Du kan ikke fortryde.`
+      );
+      if (!ok) return;
+      const r = await fetch("/api/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, id }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        state.sessions = state.sessions.filter(
+          x => !(x.source === source && x.id === id));
+        renderSidebar();
+        renderGrid();
+        toast("Chat slettet");
+      } else {
+        toast("Fejl: " + (d.error || ""));
+      }
+    });
+  });
+
+  grid.querySelectorAll(".proj-header-actions button").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const cwd = btn.dataset.cwd;
+      const action = btn.dataset.action;
+      if (action === "handover") {
+        showHandover(cwd, btn.dataset.project, false);
+        return;
+      }
+      if (action === "mobile-preview") {
+        showMobilePreview(cwd, btn.dataset.project);
+        return;
+      }
+      if (action === "browse-files") {
+        showFileBrowser(cwd, btn.dataset.project);
+        return;
+      }
+      const endpoint = action === "open-ws" ? "/api/open-in-windsurf" : "/api/open-in-finder";
+      const r = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      const d = await r.json();
+      toast(d.ok
+        ? (action === "open-ws" ? "Åbner i VS Code…" : "Åbner i Finder…")
+        : "Fejl: " + (d.error || ""));
+    });
+  });
+
+  grid.querySelectorAll(".pin-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const row = btn.closest(".chat");
+      const source = row.dataset.source;
+      const id = row.dataset.id;
+      const s = state.sessions.find(x => x.source === source && x.id === id);
+      if (!s) return;
+      const next = !s.pinned;
+      s.pinned = next;
+      // Rendér lokalt med det samme
+      renderSidebar(); renderGrid();
+      await fetch("/api/pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, id, pinned: next }),
+      });
+    });
+  });
+}
+
+let bodySearchTimer = null;
+async function refreshBodyMatches() {
+  if (!state.search || state.search.length < 2) {
+    state.bodyMatches = {};
+    return;
+  }
+  try {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(state.search)}`);
+    const d = await r.json();
+    const map = {};
+    for (const m of (d.matches || [])) {
+      map[`${m.source}:${m.id}`] = m.snippet;
+    }
+    state.bodyMatches = map;
+    renderGrid();
+  } catch (e) { /* ignore */ }
+}
+
+function chatRow(s) {
+  const title = s.title || s.first_user?.slice(0, 80) || "(uden titel)";
+  const edited = s.user_title ? "edited" : "";
+  const pinnedCls = s.pinned ? "pinned" : "";
+  const pinnedActive = s.pinned ? "active" : "";
+  const snippetHTML = renderSnippet(s);
+  return `
+    <div class="chat ${pinnedCls}" data-source="${s.source}" data-id="${escapeHTML(s.id)}">
+      <button class="pin-btn ${pinnedActive}" title="${s.pinned ? "Fjern favorit" : "Markér som favorit"}">★</button>
+      <span class="badge ${s.source}">${s.source}</span>
+      <div>
+        <div class="title ${edited}">${escapeHTML(title)}</div>
+        <div class="meta">
+          ${fmtRelative(s.ended || s.started)}
+          <span class="sep">·</span>
+          ${s.msg_count} beskeder
+          <span class="sep">·</span>
+          ${escapeHTML(s.project || "(uden mappe)")}
+        </div>
+        ${snippetHTML}
+      </div>
+      <button class="rename-btn" title="Omdøb">✎</button>
+      <button class="delete-btn" title="Slet chat">🗑</button>
+      <span class="arrow">→</span>
+    </div>
+  `;
+}
+
+function renderSnippet(s) {
+  if (!state.search) return "";
+  const key = `${s.source}:${s.id}`;
+  const snip = state.bodyMatches[key];
+  if (!snip) return "";
+  // Highlight søgeord i snippet
+  const q = state.search.trim();
+  if (!q) return `<div class="snippet">${escapeHTML(snip)}</div>`;
+  const safe = escapeHTML(snip);
+  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return `<div class="snippet">${safe.replace(re, m => `<mark>${m}</mark>`)}</div>`;
+}
+
+async function inlineRename(source, id) {
+  const s = state.sessions.find(x => x.source === source && x.id === id);
+  if (!s) return;
+  const current = s.user_title || s.title || "";
+  const next = prompt("Ny titel (tom = brug AI-titel igen):", current);
+  if (next === null) return;
+  await saveRename(source, id, next.trim());
+}
+
+async function saveRename(source, id, title) {
+  const r = await fetch("/api/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, id, title }),
+  });
+  const data = await r.json();
+  if (data.ok) {
+    // Opdater lokalt
+    const s = state.sessions.find(x => x.source === source && x.id === id);
+    if (s) {
+      s.user_title = data.title;
+      s.title = data.title || s.ai_title || s.title;
+    }
+    renderGrid();
+    toast(data.title ? "Titel opdateret" : "Titel nulstillet til AI-version");
+  } else {
+    toast("Fejl: " + (data.error || ""));
+  }
+}
+
+async function openChat(source, id) {
+  $("modal-body").innerHTML = '<div class="empty">Henter chat…</div>';
+  $("modal-bg").classList.add("open");
+  try {
+    const r = await fetch(`/api/chat/${source}/${encodeURIComponent(id)}`);
+    const data = await r.json();
+    if (data.error) {
+      $("modal-body").innerHTML = '<div class="empty">Kunne ikke hente chat.</div>';
+      return;
+    }
+    renderChatDetail(data.session, data.messages);
+  } catch (e) {
+    $("modal-body").innerHTML = '<div class="empty">Fejl: ' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+function renderChatDetail(s, messages) {
+  const title = s.title || "(uden titel)";
+  const isClaude = s.source === "claude";
+  const firstMsg = (s.first_user || "").split("\n")[0].slice(0, 200);
+
+
+  const msgsHTML = messages.map(m => `
+    <div class="msg ${m.role}">
+      <div class="role">${m.role === "user" ? "Du" : "AI"} · ${fmtDate(m.ts)}</div>
+      <div class="text">${escapeHTML(m.text)}</div>
+    </div>
+  `).join("");
+
+  // Vis nuværende sti og evt. foreslået undermappe
+  // Forkort /Users/<navn>/ til ~/ — virker for alle macOS-brugere
+  const shortenPath = p => (p || "").replace(/^\/Users\/[^/]+\//, "~/");
+  const cwdShort = shortenPath(s.cwd);
+  const hintShort = shortenPath(s.cwd_hint);
+  const hintInline = s.cwd_hint
+    ? `<button class="hint-link" id="btn-open-hint" title="Åbn ${escapeHTML(hintShort)} i stedet">↗ Åbn ${escapeHTML(s.cwd_hint.split("/").pop())}</button>`
+    : "";
+
+  $("modal-body").innerHTML = `
+    <button class="close" aria-label="Luk">×</button>
+    <div class="modal-meta">
+      <span class="badge ${s.source}">${s.source}</span>
+      ${escapeHTML(s.project)} · ${fmtDate(s.started)} · ${s.msg_count} beskeder
+    </div>
+    <div class="modal-title-row">
+      <h2 id="modal-title">${escapeHTML(title)}</h2>
+      <button class="rename-btn" id="modal-move-btn" title="Flyt til andet projekt">📁 Flyt</button>
+      <button class="rename-btn" id="modal-regenerate-btn" title="Lav ny AI-titel + resumé">↻ Ny AI-titel</button>
+      <button class="rename-btn" id="modal-rename-btn">✎ Omdøb</button>
+    </div>
+    <div class="cwd-line">📁 ${escapeHTML(cwdShort || "(ingen mappe registreret)")}${hintInline}</div>
+
+    <div class="section-label">Resumé</div>
+    <div class="summary">${escapeHTML(s.summary || "(intet resume)")}</div>
+
+    <div class="actions">
+      <button class="primary" id="btn-find-chat">Find chatten i VS Code  →</button>
+    </div>
+    <div id="find-reveal" class="find-reveal" hidden>
+      <div class="label">
+        VS Code er åbnet på projektmappen.
+        Klik <strong>${isClaude ? "Claude" : "Codex"}-ikonet i sidebaren</strong> → <strong>Past Conversations</strong>.
+      </div>
+
+      ${s.ext_label ? `
+      <div class="find-strategy">
+        <div class="find-strategy-heading">🔍 Søg på denne titel (matcher 100%)</div>
+        <div class="find-strategy-body">
+          Det er den præcise titel VS Code viser i Past Conversations:
+        </div>
+        <div class="first-msg-box">${escapeHTML(s.ext_label)}</div>
+        <button class="copy-btn" id="btn-copy-first" data-copy="${escapeHTML(s.ext_label)}">Kopiér titel</button>
+        ${!isClaude ? '<div class="reveal-hint">Codex-søgefelt: brug <kbd>⌘V</kbd> hvis højreklik-paste ikke virker.</div>' : ""}
+      </div>
+      ` : `
+      <div class="find-strategy">
+        <div class="find-strategy-heading">🔍 Søg eller scroll til chatten</div>
+        <div class="find-strategy-body">
+          VS Code har ikke registreret denne chat endnu — søg på første besked eller scroll til datoen:
+        </div>
+        <div class="first-msg-box">${escapeHTML(firstMsg)}</div>
+        <button class="copy-btn" id="btn-copy-first" data-copy="${escapeHTML(firstMsg)}">Kopiér første besked</button>
+      </div>
+      `}
+
+      <div class="find-strategy">
+        <div class="find-strategy-heading">📅 Eller brug datoen som backup</div>
+        <div class="find-strategy-body">
+          Past Conversations er sorteret efter tid. Scroll til
+          <span class="time-chip">${fmtVSCodeRelative(s.ended || s.started)}</span>
+          — chatten er fra <strong>${fmtDate(s.started)} · ${new Date(s.started).toLocaleTimeString("da-DK", {hour:"2-digit",minute:"2-digit"})}</strong>.
+        </div>
+      </div>
+    </div>
+    <details>
+      <summary>Vis hele chatten (${messages.length} beskeder)</summary>
+      <div class="messages">${msgsHTML || '<div class="empty">Ingen læselige beskeder fundet.</div>'}</div>
+    </details>
+  `;
+
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  $("modal-rename-btn").onclick = () => {
+    const h2 = $("modal-title");
+    const current = s.user_title || s.title || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "rename-input";
+    input.value = current;
+    h2.replaceWith(input);
+    input.focus();
+    input.select();
+    const finish = async (commit) => {
+      if (commit) {
+        const newTitle = input.value.trim();
+        await saveRename(s.source, s.id, newTitle);
+        s.title = newTitle || s.ai_title || s.title;
+        s.user_title = newTitle;
+      }
+      const newH2 = document.createElement("h2");
+      newH2.id = "modal-title";
+      newH2.textContent = s.title;
+      input.replaceWith(newH2);
+    };
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") finish(true);
+      else if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+  };
+
+  const openInIDE = async (path) => {
+    const r = await fetch("/api/open-in-windsurf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: path, source: s.source }),
+    });
+    const d = await r.json();
+    if (!d.ok) toast("Fejl: " + (d.error || ""));
+    return d.ok;
+  };
+
+  $("modal-move-btn").onclick = async () => {
+    // Hent alle Masterversioner-undermapper (inkl. tomme) + state.projects
+    let allFolders = [];
+    try {
+      const r = await fetch("/api/all-folders");
+      const d = await r.json();
+      allFolders = d.folders || [];
+    } catch (e) { /* fallback til state.projects */ }
+    // Merge: brug folder-listen som base, tilføj data fra state.projects hvor de matcher
+    const projByName = new Map(state.projects.map(p => [p.name, p]));
+    const combined = allFolders.map(f => ({
+      name: f.name,
+      cwd: f.cwd,
+      chats: projByName.get(f.name)?.chats || 0,
+    }));
+    combined.sort((a, b) => a.name.localeCompare(b.name, "da"));
+    const options = combined
+      .filter(p => p.cwd && p.cwd !== s.cwd)
+      .map(p => {
+        const count = p.chats ? ` (${p.chats})` : " (tom)";
+        return `<option value="${escapeHTML(p.cwd)}">${escapeHTML(p.name)}${count}</option>`;
+      })
+      .join("");
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "margin-top:10px;padding:12px;background:#f6f4ee;border-radius:6px;border:1px dashed var(--line-strong);";
+    wrap.innerHTML = `
+      <div class="section-label" style="margin:0 0 6px;">Flyt chatten til hvilket projekt?</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">
+        Selve .jsonl-filen flyttes IKKE — Command Center overskriver bare projekttilknytningen.
+        Chatten forbliver tilgængelig i VS Codes Past Conversations under sin oprindelige cwd.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <select id="move-target" style="flex:1;min-width:200px;padding:7px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;background:#fff;">
+          <option value="">— Vælg projekt —</option>
+          ${options}
+        </select>
+        <button id="move-confirm" style="background:var(--ink);color:#fff;border:none;padding:7px 14px;border-radius:4px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;">Flyt</button>
+        <button id="move-cancel" style="background:transparent;border:1px solid var(--line-strong);color:var(--muted);padding:7px 14px;border-radius:4px;cursor:pointer;font:inherit;font-size:12px;">Annullér</button>
+      </div>
+      <div id="move-feedback" style="font-size:12px;margin-top:8px;"></div>`;
+    $("modal-title").parentElement.insertAdjacentElement("afterend", wrap);
+    $("modal-move-btn").style.display = "none";
+
+    $("move-cancel").onclick = () => { wrap.remove(); $("modal-move-btn").style.display = ""; };
+    $("move-confirm").onclick = async () => {
+      const target = $("move-target").value;
+      if (!target) { $("move-feedback").innerHTML = "<span style='color:var(--accent);'>Vælg et projekt først.</span>"; return; }
+      $("move-feedback").textContent = "Flytter…";
+      const r = await fetch("/api/move-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: s.source, id: s.id, target_cwd: target }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        // Opdatér lokal session-data
+        s.cwd = target;
+        s.project = d.project;
+        s.user_cwd = target;
+        toast(`Flyttet til ${d.project}`);
+        renderSidebar();
+        renderGrid();
+        closeModal();
+      } else {
+        $("move-feedback").innerHTML = `<span style='color:var(--accent);'>Fejl: ${escapeHTML(d.error || "")}</span>`;
+      }
+    };
+  };
+
+  $("modal-regenerate-btn").onclick = async () => {
+    const btn = $("modal-regenerate-btn");
+    btn.textContent = "↻ Henter…";
+    btn.disabled = true;
+    try {
+      const r = await fetch("/api/regenerate-title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: s.source, id: s.id }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        s.ai_title = d.title;
+        s.summary = d.summary;
+        if (!s.user_title) s.title = d.title;
+        toast("Ny AI-titel: " + d.title);
+        renderGrid();
+        // Genåbn modal med nye data
+        openChat(s.source, s.id);
+      } else {
+        toast("Fejl: " + (d.error || ""));
+        btn.textContent = "↻ Ny AI-titel";
+        btn.disabled = false;
+      }
+    } catch (e) {
+      toast("Fejl: " + e.message);
+      btn.textContent = "↻ Ny AI-titel";
+      btn.disabled = false;
+    }
+  };
+  if ($("btn-open-hint")) {
+    $("btn-open-hint").onclick = () => openInIDE(s.cwd_hint);
+  }
+
+  $("btn-find-chat").onclick = async () => {
+    const btn = $("btn-find-chat");
+    btn.disabled = true;
+    btn.textContent = "Åbner VS Code…";
+    // Brug evt. undermappe hvis hint findes
+    const target = s.cwd_hint || s.cwd;
+    await openInIDE(target);
+    $("find-reveal").hidden = false;
+    btn.style.display = "none";
+  };
+
+  $("btn-copy-first").onclick = async () => {
+    await navigator.clipboard.writeText($("btn-copy-first").dataset.copy);
+    toast("Kopieret — indsæt i Past Conversations-søgefeltet");
+  };
+}
+
+function closeModal() { $("modal-bg").classList.remove("open"); }
+
+$("modal-bg").addEventListener("click", e => {
+  if (e.target === $("modal-bg")) closeModal();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeModal();
+});
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// ─── Persistens af UI-præferencer ───
+const PREFS_KEY = "chatoverblik.prefs.v1";
+function savePrefs() {
+  const prefs = {
+    groupBy: state.groupBy,
+    sort: state.sort,
+    filter: state.filter,
+    selectedCwd: state.selectedCwd,
+    showOnlyPinned: state.showOnlyPinned,
+    showOnlyShort: state.showOnlyShort,
+    activityWindow: state.activityWindow,
+    openGroups: [...state.openGroups],
+    overviewOpen: state.overviewOpen,
+  };
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
+}
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const prefs = JSON.parse(raw);
+    if (Array.isArray(prefs.openGroups)) {
+      state.openGroups = new Set(prefs.openGroups);
+      delete prefs.openGroups;
+    }
+    Object.assign(state, prefs);
+    if ($("group-by")) $("group-by").value = state.groupBy;
+    if ($("sort")) $("sort").value = state.sort;
+    if ($("filter-source")) $("filter-source").value = state.filter;
+  } catch {}
+}
+
+$("search").addEventListener("input", e => {
+  state.search = e.target.value;
+  renderGrid();
+  clearTimeout(bodySearchTimer);
+  bodySearchTimer = setTimeout(refreshBodyMatches, 220);
+});
+$("filter-source").addEventListener("change", e => { state.filter = e.target.value; savePrefs(); renderGrid(); });
+$("sort").addEventListener("change", e => { state.sort = e.target.value; savePrefs(); renderGrid(); });
+$("group-by").addEventListener("change", e => { state.groupBy = e.target.value; savePrefs(); renderGrid(); });
+function getVisibleGroupIds() {
+  return [...document.querySelectorAll("#grid details.project-group")]
+    .map(d => d.dataset.gid)
+    .filter(Boolean);
+}
+function updateFoldToggleLabel() {
+  const ids = getVisibleGroupIds();
+  if (!ids.length) return;
+  const allOpen = ids.every(id => state.openGroups.has(id));
+  $("fold-toggle").textContent = allOpen ? "Fold alle sammen" : "Fold alle ud";
+}
+$("fold-toggle").addEventListener("click", () => {
+  const ids = getVisibleGroupIds();
+  const allOpen = ids.every(id => state.openGroups.has(id));
+  if (allOpen) {
+    ids.forEach(id => state.openGroups.delete(id));
+  } else {
+    ids.forEach(id => state.openGroups.add(id));
+  }
+  savePrefs();
+  renderGrid();
+});
+$("clear-filter").addEventListener("click", () => {
+  state.selectedCwd = "";
+  state.showOnlyPinned = false;
+  state.showOnlyShort = false;
+  state.activityWindow = "";
+  savePrefs();
+  renderSidebar(); renderGrid();
+});
+
+// ─── Workflow-analyse ───
+function renderMarkdown(md) {
+  // Minimal markdown renderer — håndterer headings, lists, bold, italic, code
+  let html = md;
+  html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^# (.*)$/gm, "<h1>$1</h1>");
+  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/(?<!\w)\*([^*\n]+?)\*(?!\w)/g, "<em>$1</em>");
+  html = html.replace(/_([^_\n]+?)_/g, "<em>$1</em>");
+  html = html.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
+  // Lister
+  const lines = html.split("\n");
+  const out = [];
+  let inUl = false, inOl = false;
+  for (const ln of lines) {
+    const ulMatch = ln.match(/^[\-*] (.+)$/);
+    const olMatch = ln.match(/^\d+\. (.+)$/);
+    if (ulMatch) {
+      if (!inUl) { if (inOl) { out.push("</ol>"); inOl = false; } out.push("<ul>"); inUl = true; }
+      out.push("<li>" + ulMatch[1] + "</li>");
+    } else if (olMatch) {
+      if (!inOl) { if (inUl) { out.push("</ul>"); inUl = false; } out.push("<ol>"); inOl = true; }
+      out.push("<li>" + olMatch[1] + "</li>");
+    } else {
+      if (inUl) { out.push("</ul>"); inUl = false; }
+      if (inOl) { out.push("</ol>"); inOl = false; }
+      if (ln.startsWith("<h") || ln.trim() === "") out.push(ln);
+      else out.push("<p>" + ln + "</p>");
+    }
+  }
+  if (inUl) out.push("</ul>");
+  if (inOl) out.push("</ol>");
+  return out.join("\n");
+}
+
+const MODEL_LABELS = {
+  "claude-sonnet-4-6": "Sonnet 4.6 (~$0.50)",
+  "claude-opus-4-8": "Opus 4.8 (~$2.50)",
+};
+
+function modelPicker(idAttr) {
+  return `
+    <select id="${idAttr}" style="font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;">
+      <option value="claude-sonnet-4-6">Sonnet 4.6 (hurtigere, ~$0.50)</option>
+      <option value="claude-opus-4-8">Opus 4.8 (dybere, ~$2.50)</option>
+    </select>`;
+}
+
+async function showAnalysis(forceNew = false, model = "claude-sonnet-4-6") {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📊 Workflow-analyse</h2>
+    <div class="analysis-loading" id="analysis-loading">Henter analyse…</div>
+    <div id="analysis-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  const endpoint = forceNew ? "/api/workflow-analysis" : "/api/workflow-analysis-cached";
+  if (forceNew) {
+    $("analysis-loading").textContent = "Analyserer (30-90 sek for Sonnet, 1-2 min for Opus)…";
+  }
+  try {
+    const opts = forceNew
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) }
+      : {};
+    const r = await fetch(endpoint, opts);
+    const d = await r.json();
+    if (!d.ok) {
+      if (!forceNew && r.status === 404) {
+        $("analysis-loading").style.display = "none";
+        $("analysis-result").style.display = "block";
+        $("analysis-result").innerHTML = `
+          <p>Du har ikke kørt en analyse endnu. Vælg model og start:</p>
+          <p style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            ${modelPicker("init-model")}
+            <button id="run-analysis" style="background:var(--accent);color:#fff;border:none;padding:10px 20px;font-weight:700;border-radius:4px;cursor:pointer;font-size:14px;font-family:inherit;">Kør analyse</button>
+          </p>
+          <p style="font-size:12px;color:var(--muted);">
+            <strong>Sonnet:</strong> hurtig, kapabel, god til opgaven · <strong>Opus:</strong> 5× dyrere, bedre til subtile mønstre og synteser
+          </p>`;
+        $("run-analysis").onclick = () => showAnalysis(true, $("init-model").value);
+        return;
+      }
+      $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
+      return;
+    }
+    $("analysis-loading").style.display = "none";
+    $("analysis-result").style.display = "block";
+    const modelTag = d.model ? ` · ${MODEL_LABELS[d.model] || d.model}` : "";
+    $("analysis-result").innerHTML = `
+      <div class="analysis-meta">
+        <span>Genereret: ${d.generated_at || "—"}${modelTag}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${modelPicker("regen-model")}
+          <button id="regen-analysis">↻ Genberegn</button>
+        </span>
+      </div>
+      <div class="analysis-content">${renderMarkdown(d.markdown)}</div>`;
+    if (d.model) $("regen-model").value = d.model;
+    $("regen-analysis").onclick = () => showAnalysis(true, $("regen-model").value);
+  } catch (e) {
+    $("analysis-loading").textContent = "Fejl: " + e.message;
+  }
+}
+
+$("btn-analysis").addEventListener("click", () => showAnalysis(false));
+
+// ─── Genoptag-guide per projekt ───
+async function showHandover(cwd, projectName, forceNew = false, model = "claude-sonnet-4-6") {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Genoptag-guide: ${escapeHTML(projectName)}</h2>
+    <div class="analysis-loading" id="analysis-loading">${forceNew ? "Genererer guide (20-40 sek)…" : "Indlæser…"}</div>
+    <div id="analysis-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  try {
+    const r = await fetch("/api/project-handover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd, project: projectName, model }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
+      return;
+    }
+    $("analysis-loading").style.display = "none";
+    $("analysis-result").style.display = "block";
+    const modelTag = d.model ? ` · ${MODEL_LABELS[d.model] || d.model}` : "";
+    $("analysis-result").innerHTML = `
+      <div class="analysis-meta">
+        <span>Genereret: ${d.generated_at}${modelTag} · gemt som HANDOVER.md i projektmappen</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${modelPicker("regen-handover-model")}
+          <button id="regen-handover">↻ Genberegn</button>
+        </span>
+      </div>
+      <div class="analysis-content">${renderMarkdown(d.markdown)}</div>`;
+    if (d.model) $("regen-handover-model").value = d.model;
+    $("regen-handover").onclick = () => showHandover(cwd, projectName, true, $("regen-handover-model").value);
+  } catch (e) {
+    $("analysis-loading").textContent = "Fejl: " + e.message;
+  }
+}
+
+// ─── Ugens retro ───
+async function showWeeklyRetro(model = "claude-sonnet-4-6") {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📅 Ugens retro</h2>
+    <div class="analysis-loading" id="analysis-loading">Henter sidste 7 dages chats og analyserer…</div>
+    <div id="analysis-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  try {
+    const r = await fetch("/api/weekly-retro", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
+      return;
+    }
+    $("analysis-loading").style.display = "none";
+    $("analysis-result").style.display = "block";
+    const modelTag = d.model ? ` · ${MODEL_LABELS[d.model] || d.model}` : "";
+    $("analysis-result").innerHTML = `
+      <div class="analysis-meta">
+        <span>${d.chat_count} chats · ${d.generated_at}${modelTag}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${modelPicker("regen-retro-model")}
+          <button id="regen-retro">↻ Kør igen</button>
+        </span>
+      </div>
+      <div class="analysis-content">${renderMarkdown(d.markdown)}</div>`;
+    if (d.model) $("regen-retro-model").value = d.model;
+    $("regen-retro").onclick = () => showWeeklyRetro($("regen-retro-model").value);
+  } catch (e) {
+    $("analysis-loading").textContent = "Fejl: " + e.message;
+  }
+}
+
+// ─── Nyt projekt ───
+function showNewProject() {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Opret nyt projekt</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:18px;">
+      Opretter en ny mappe under Masterversioner med STATUS.md, README.md, .gitignore og en tom index.html.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <label>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Projektnavn</div>
+        <input id="np-name" type="text" placeholder="fx Klimakort eller MitNyeSpil" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;" autofocus>
+      </label>
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Type</div>
+        <label style="margin-right:18px;cursor:pointer;"><input type="radio" name="np-type" value="arbejde" checked> Arbejde</label>
+        <label style="cursor:pointer;"><input type="radio" name="np-type" value="privat"> Privat</label>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">AI-extension at åbne med</div>
+        <label style="margin-right:18px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="np-source" value="claude" checked>
+          <span class="badge claude" style="font-size:10px;padding:2px 6px;">Claude</span>
+        </label>
+        <label style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+          <input type="radio" name="np-source" value="codex">
+          <span class="badge codex" style="font-size:10px;padding:2px 6px;">Codex</span>
+        </label>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:8px;">
+        <button id="np-submit" style="background:var(--accent);color:#fff;border:none;padding:10px 22px;font-weight:700;border-radius:4px;cursor:pointer;font-size:14px;font-family:inherit;">Opret</button>
+        <button id="np-cancel" style="background:transparent;color:var(--muted);border:1px solid var(--line-strong);padding:10px 22px;border-radius:4px;cursor:pointer;font-size:14px;font-family:inherit;">Annullér</button>
+      </div>
+      <div id="np-feedback" style="font-size:13px;"></div>
+    </div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+  $("np-cancel").onclick = closeModal;
+  $("np-submit").onclick = async () => {
+    const name = $("np-name").value.trim();
+    const type = document.querySelector("input[name='np-type']:checked")?.value;
+    if (!name) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Skriv et navn først.</span>"; return; }
+    $("np-feedback").textContent = "Opretter…";
+    const r = await fetch("/api/new-project", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, type }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const firstPrompt = `Hej! Jeg starter et nyt projekt: **${name}** (${type}).
+
+Før vi går i gang vil jeg være sikker på du har fuld kontekst. Gør følgende — og bekræft hvert punkt eksplicit:
+
+**1. Memory** (auto-loaded af dig — jeg vil bare se du har den):
+List de 3-5 mest relevante memory-entries du har om mig fra Masterversioner-konteksten (user_profile, vigtige feedback-regler, relaterede projekter). Lige korte titler.
+
+**2. Læs disse filer i denne rækkefølge:**
+- \`Masterversioner/CLAUDE.md\` (eller AGENTS.md hvis du er Codex) — alle mine workflow-regler
+- \`Masterversioner/${name}/STATUS.md\` — den tomme status-fil jeg lige har oprettet
+- \`Masterversioner/WIDGETS.md\` — hvis der findes en relevant skabelon
+
+**3. Bekræft med:**
+- Én sætning om hvad projektet handler om (din forståelse — gerne hvis du genkender en pattern fra mine andre projekter)
+- Tre konkrete spørgsmål du har brug for svar på, for at vi kan komme i gang
+
+Så ved jeg du har den fulde kontekst og ikke bare har "antaget".`;
+
+      $("np-feedback").innerHTML = `
+        <div style='color:var(--codex);font-weight:700;margin-bottom:10px;'>✅ Oprettet i <code>${escapeHTML(d.path)}</code></div>
+        <div style='font-size:12px;color:var(--muted);margin-bottom:10px;'>
+          Filer oprettet: <code>STATUS.md</code>, <code>README.md</code>, <code>index.html</code>, <code>.gitignore</code>
+        </div>
+        <div style='background:#fff8e1;border-left:3px solid #d4a017;padding:10px 12px;border-radius:0 4px 4px 0;margin:10px 0;'>
+          <div style='font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#8a6500;margin-bottom:6px;'>Foreslået første besked til AI'en</div>
+          <div style='font-size:12px;color:#5a4500;line-height:1.5;margin-bottom:8px;'>
+            Kopiér og indsæt som din første besked i Claude/Codex. Den tvinger AI'en til at læse rigtigt og bekræfte konteksten — så er du sikker på den ved hvad den laver.
+          </div>
+          <button id='np-copy-prompt' style='background:#d4a017;color:#fff;border:none;padding:7px 14px;border-radius:3px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;'>Kopiér første besked</button>
+        </div>
+        <div style='margin-top:10px;'>
+          <button id='np-open' style='background:var(--ink);color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font:inherit;font-size:13px;'>Åbn i VS Code →</button>
+        </div>`;
+
+      $("np-copy-prompt").onclick = async () => {
+        await navigator.clipboard.writeText(firstPrompt);
+        toast("Første besked kopieret — paste den i Claude/Codex");
+      };
+      $("np-open").onclick = async () => {
+        const chosenSource = document.querySelector("input[name='np-source']:checked")?.value || "claude";
+        await fetch("/api/open-in-windsurf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cwd: d.path, source: chosenSource, mode: "new-chat" }),
+        });
+        closeModal();
+      };
+    } else {
+      $("np-feedback").innerHTML = `<span style='color:var(--accent);'>Fejl: ${escapeHTML(d.error || "")}</span>`;
+    }
+  };
+}
+
+$("btn-weekly-retro").addEventListener("click", () => showWeeklyRetro());
+$("btn-new-project").addEventListener("click", () => showNewProject());
+$("btn-widgets").addEventListener("click", () => showWidgets());
+
+// ─── File browser & code viewer ───
+async function showFileBrowser(cwd, projectName) {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📄 Filer i ${escapeHTML(projectName)}</h2>
+    <div class="analysis-loading" id="files-loading">Indlæser filtræ…</div>
+    <div id="files-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  try {
+    const r = await fetch(`/api/file-tree?cwd=${encodeURIComponent(cwd)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      $("files-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "")}</div>`;
+      return;
+    }
+    $("files-loading").style.display = "none";
+    $("files-result").style.display = "block";
+    $("files-result").innerHTML = `
+      <div class="code-browser">
+        <div class="file-tree" id="file-tree-container"></div>
+        <div class="file-viewer" id="file-viewer-container">
+          <div class="empty-viewer">Vælg en fil i træet for at se den her</div>
+        </div>
+      </div>`;
+    renderFileTree(d.tree, $("file-tree-container"));
+  } catch (e) {
+    $("files-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function renderFileTree(tree, container) {
+  const renderNodes = (nodes) => {
+    return `<ul>${nodes.map(n => {
+      if (n.type === "dir") {
+        return `<li class="dir" data-path="${escapeHTML(n.path)}">
+          <span>${escapeHTML(n.name)}</span>
+          ${renderNodes(n.children || [])}
+        </li>`;
+      }
+      return `<li class="file" data-path="${escapeHTML(n.path)}" data-ext="${escapeHTML(n.ext || "")}">
+        ${escapeHTML(n.name)}
+      </li>`;
+    }).join("")}</ul>`;
+  };
+  container.innerHTML = renderNodes(tree);
+  container.querySelectorAll("li.dir > span").forEach(span => {
+    span.addEventListener("click", (e) => {
+      e.stopPropagation();
+      span.parentElement.classList.toggle("open");
+    });
+  });
+  container.querySelectorAll("li.file").forEach(li => {
+    li.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      container.querySelectorAll("li.file.active").forEach(el => el.classList.remove("active"));
+      li.classList.add("active");
+      await loadFileContent(li.dataset.path);
+    });
+  });
+}
+
+async function loadFileContent(path) {
+  const viewer = $("file-viewer-container");
+  viewer.innerHTML = `<div class="empty-viewer">Indlæser…</div>`;
+  try {
+    const r = await fetch(`/api/file-content?path=${encodeURIComponent(path)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      viewer.innerHTML = `<div class="empty-viewer">Fejl: ${escapeHTML(d.error || "")}</div>`;
+      return;
+    }
+    const shortPath = d.path.replace(/^\/Users\/[^/]+\//, "~/");
+    const sizeKB = (d.size / 1024).toFixed(1);
+    viewer.innerHTML = `
+      <div class="file-meta">
+        <span>${escapeHTML(shortPath)}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          <span>${sizeKB} kB</span>
+          <span class="lang-tag">${escapeHTML(d.language)}</span>
+        </span>
+      </div>
+      <div class="file-content"><pre><code class="language-${escapeHTML(d.language)}">${escapeHTML(d.content)}</code></pre></div>`;
+    // Tving Prism til at highlight
+    if (window.Prism) {
+      const codeEl = viewer.querySelector("code");
+      if (codeEl) Prism.highlightElement(codeEl);
+    }
+  } catch (e) {
+    viewer.innerHTML = `<div class="empty-viewer">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+// ─── WIDGETS.md viewer/editor ───
+async function showWidgets() {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📚 Komponent-bibliotek</h2>
+    <div class="analysis-loading" id="widgets-loading">Indlæser WIDGETS.md…</div>
+    <div id="widgets-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  try {
+    const r = await fetch("/api/widgets");
+    const d = await r.json();
+    if (!d.ok) {
+      $("widgets-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "")}</div>`;
+      return;
+    }
+    $("widgets-loading").style.display = "none";
+    $("widgets-result").style.display = "block";
+    renderWidgetsView(d.markdown, d.path || "");
+  } catch (e) {
+    $("widgets-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function renderWidgetsView(markdown, path) {
+  $("widgets-result").innerHTML = `
+    <div class="analysis-meta">
+      <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;">${escapeHTML(path)}</span>
+      <span style="display:flex;gap:8px;">
+        <button id="widgets-edit-btn" class="copy-btn" style="background:var(--ink);color:#fff;border:none;padding:6px 14px;font:inherit;font-size:12px;border-radius:4px;cursor:pointer;font-weight:700;">✎ Rediger</button>
+      </span>
+    </div>
+    <div class="analysis-content" id="widgets-rendered">${renderMarkdown(markdown)}</div>`;
+  $("widgets-edit-btn").onclick = () => renderWidgetsEditor(markdown, path);
+}
+
+function renderWidgetsEditor(markdown, path) {
+  $("widgets-result").innerHTML = `
+    <div class="analysis-meta">
+      <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;">${escapeHTML(path)}</span>
+      <span style="display:flex;gap:8px;">
+        <button id="widgets-cancel-btn" style="background:transparent;border:1px solid var(--line-strong);color:var(--muted);padding:6px 14px;font:inherit;font-size:12px;border-radius:4px;cursor:pointer;">Annullér</button>
+        <button id="widgets-save-btn" style="background:var(--accent);color:#fff;border:none;padding:6px 14px;font:inherit;font-size:12px;border-radius:4px;cursor:pointer;font-weight:700;">💾 Gem</button>
+      </span>
+    </div>
+    <textarea id="widgets-editor" style="width:100%;min-height:60vh;padding:12px 14px;border:1px solid var(--line-strong);border-radius:6px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5;background:#fff;color:var(--ink);resize:vertical;box-sizing:border-box;">${escapeHTML(markdown)}</textarea>
+    <div id="widgets-feedback" style="font-size:12px;margin-top:10px;"></div>`;
+
+  $("widgets-cancel-btn").onclick = () => renderWidgetsView(markdown, path);
+  $("widgets-save-btn").onclick = async () => {
+    const newContent = $("widgets-editor").value;
+    $("widgets-feedback").textContent = "Gemmer…";
+    try {
+      const r = await fetch("/api/widgets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ markdown: newContent }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        $("widgets-feedback").innerHTML = `<span style="color:var(--codex);">✅ Gemt ${d.saved_at}. Backup ligger som WIDGETS.md.bak</span>`;
+        setTimeout(() => renderWidgetsView(newContent, path), 800);
+      } else {
+        $("widgets-feedback").innerHTML = `<span style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "")}</span>`;
+      }
+    } catch (e) {
+      $("widgets-feedback").innerHTML = `<span style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</span>`;
+    }
+  };
+}
+
+// ─── Mobile preview ───
+async function showMobilePreview(cwd, projectName) {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📱 Mobile Preview: ${escapeHTML(projectName)}</h2>
+    <div id="preview-loading" class="analysis-loading">Finder lokal IP…</div>
+    <div id="preview-body" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModal;
+
+  try {
+    const r = await fetch(`/api/preview-info?cwd=${encodeURIComponent(cwd)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      $("preview-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "")}</div>`;
+      return;
+    }
+
+    $("preview-loading").style.display = "none";
+    $("preview-body").style.display = "block";
+
+    // Filvælger hvis flere HTML-filer
+    const fileOptions = (d.html_files || [])
+      .map(f => `<option value="${escapeHTML(f)}" ${f === d.default_file ? "selected" : ""}>${escapeHTML(f)}</option>`)
+      .join("");
+
+    $("preview-body").innerHTML = `
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;">
+        <div id="qr-container" style="background:#fff;padding:14px;border:1px solid var(--line-strong);border-radius:8px;width:240px;height:240px;display:flex;align-items:center;justify-content:center;"></div>
+        <div>
+          <div class="section-label" style="margin:0 0 8px;">Sådan tester du på iPhone</div>
+          <ol style="margin:0 0 16px;padding-left:22px;font-size:13px;line-height:1.6;color:var(--ink);">
+            <li>Telefonen skal være på <strong>samme WiFi</strong> som denne Mac.</li>
+            <li>Åbn <strong>Kamera-appen</strong> på iPhone.</li>
+            <li>Peg på QR-koden — tryk det link der dukker op øverst.</li>
+            <li>Projektet åbner i Safari på telefonen.</li>
+          </ol>
+          <div class="section-label" style="margin:0 0 6px;">Eller indtast URL'en manuelt:</div>
+          <div style="display:flex;gap:6px;margin-bottom:14px;">
+            <input id="preview-url" type="text" readonly value="${escapeHTML(d.url)}" style="flex:1;padding:8px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:12px;font-family:ui-monospace,Menlo,monospace;background:#f6f4ee;">
+            <button id="copy-url" style="background:var(--ink);color:#fff;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;font:inherit;font-size:12px;font-weight:700;">Kopiér</button>
+          </div>
+          ${d.html_files.length > 1 ? `
+          <div class="section-label" style="margin:0 0 6px;">Vælg HTML-fil:</div>
+          <select id="preview-file" style="padding:7px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;background:#fff;width:100%;">${fileOptions}</select>
+          ` : ""}
+        </div>
+      </div>
+      <div style="margin-top:18px;padding:10px 14px;background:#fff7e0;border-left:3px solid #d4a017;border-radius:0 4px 4px 0;font-size:12px;color:#8a6500;line-height:1.5;">
+        <strong>Første gang:</strong> macOS kan spørge om at tillade indgående netværksforbindelser. Klik <strong>Tillad</strong>.
+        Hvis du senere stoppede den, tjek i Systemindstillinger → Netværk → Firewall.
+      </div>`;
+
+    // Generer QR-kode
+    function renderQR(url) {
+      const container = document.getElementById("qr-container");
+      try {
+        const qr = qrcode(0, 'M');
+        qr.addData(url);
+        qr.make();
+        container.innerHTML = qr.createSvgTag({ scalable: true });
+        const svg = container.querySelector("svg");
+        if (svg) { svg.style.width = "100%"; svg.style.height = "100%"; }
+      } catch (e) {
+        container.textContent = "QR-fejl: " + e.message;
+      }
+    }
+    renderQR(d.url);
+
+    $("copy-url").onclick = async () => {
+      await navigator.clipboard.writeText($("preview-url").value);
+      toast("URL kopieret");
+    };
+
+    if ($("preview-file")) {
+      $("preview-file").onchange = (e) => {
+        const newFile = e.target.value;
+        const newUrl = `http://${d.ip}:${d.port}/preview/${d.encoded_cwd}/${encodeURIComponent(newFile)}`;
+        $("preview-url").value = newUrl;
+        renderQR(newUrl);
+      };
+    }
+  } catch (e) {
+    $("preview-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+// Gem fold-tilstand på Chat-oversigt sektionen
+const overviewEl = document.getElementById("overview-details");
+if (overviewEl) {
+  overviewEl.addEventListener("toggle", () => {
+    state.overviewOpen = overviewEl.open;
+    savePrefs();
+  });
+}
+
+loadPrefs();
+loadSessions();
+setInterval(loadSessions, 4000);
+</script>
+</body>
+</html>
