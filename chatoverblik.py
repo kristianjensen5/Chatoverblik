@@ -1253,7 +1253,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/widgets":
-            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/WIDGETS.md")
+            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/context/04_widgets.md")
             if not widgets_file.exists():
                 self._send_json({"ok": True, "markdown": "", "exists": False})
                 return
@@ -1814,9 +1814,9 @@ En ting der overraskede dig i mønstrene"""
                 return
             try:
                 base.mkdir(parents=True)
-                # STATUS.md fra skabelon
+                # STATUS.md fra skabelon i context/
                 template = (Path("/Users/kristian.jensen/Documents/CODE/Masterversioner")
-                           / "STATUS.template.md")
+                           / "context" / "06_status_template.md")
                 status_text = template.read_text(encoding="utf-8") if template.exists() else ""
                 status_text = (status_text
                               .replace("<PROJEKTNAVN>", name)
@@ -1843,10 +1843,12 @@ En ting der overraskede dig i mønstrene"""
             return
 
         if self.path == "/api/widgets":
-            # POST: gem WIDGETS.md
+            # POST: gem context/04_widgets.md
             content = data.get("markdown", "")
-            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/WIDGETS.md")
+            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/context/04_widgets.md")
             try:
+                # Sørg for at context-mappen findes
+                widgets_file.parent.mkdir(exist_ok=True)
                 # Backup gammel version
                 if widgets_file.exists():
                     backup = widgets_file.with_suffix(".md.bak")
