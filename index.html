@@ -1292,10 +1292,38 @@ function shortHost(url) {
   } catch { return url; }
 }
 
+// Antal in-flight bruger-mutationer (POSTs der ændrer state).
+// Polling skipper når denne er > 0, så vi ikke overskriver optimistiske
+// lokale ændringer med stale data fra en igangværende request.
+let pendingMutations = 0;
+
+// Wrapper omkring fetch der bumper pendingMutations op og ned, og trigger
+// en frisk loadSessions så snart sidste mutation er færdig — så UI'et
+// hurtigt synkroniseres med server-state i stedet for at vente på næste
+// 4-sekunders poll.
+async function mutationFetch(url, opts) {
+  pendingMutations++;
+  try {
+    return await fetch(url, opts);
+  } finally {
+    pendingMutations--;
+    if (pendingMutations === 0) {
+      // Mikro-delay så server-handleren faktisk har sluppet STATE_LOCK
+      // før vi fetcher /api/sessions.
+      setTimeout(loadSessions, 0);
+    }
+  }
+}
+
 async function loadSessions() {
+  // Spring over hvis en bruger-mutation er i gang — ellers risikerer vi
+  // at overskrive optimistiske ændringer med stale poll-data.
+  if (pendingMutations > 0) return;
   try {
     const r = await fetch("/api/sessions");
     const data = await r.json();
+    // Hvis en mutation startede mens vi ventede på svar: smid svaret væk.
+    if (pendingMutations > 0) return;
     state.sessions = data.sessions || [];
     state.projects = data.projects || [];
     state.loading  = data.loading;
@@ -1667,7 +1695,7 @@ function renderGrid() {
         `Du kan ikke fortryde.`
       );
       if (!ok) return;
-      const r = await fetch("/api/delete", {
+      const r = await mutationFetch("/api/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source, id }),
@@ -1728,7 +1756,7 @@ function renderGrid() {
       s.pinned = next;
       // Rendér lokalt med det samme
       renderSidebar(); renderGrid();
-      await fetch("/api/pin", {
+      await mutationFetch("/api/pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source, id, pinned: next }),
@@ -1806,7 +1834,7 @@ async function inlineRename(source, id) {
 }
 
 async function saveRename(source, id, title) {
-  const r = await fetch("/api/rename", {
+  const r = await mutationFetch("/api/rename", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, id, title }),
@@ -2016,7 +2044,7 @@ function renderChatDetail(s, messages) {
       const target = $("move-target").value;
       if (!target) { $("move-feedback").innerHTML = "<span style='color:var(--accent);'>Vælg et projekt først.</span>"; return; }
       $("move-feedback").textContent = "Flytter…";
-      const r = await fetch("/api/move-chat", {
+      const r = await mutationFetch("/api/move-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: s.source, id: s.id, target_cwd: target }),
@@ -2042,7 +2070,7 @@ function renderChatDetail(s, messages) {
     btn.textContent = "↻ Henter…";
     btn.disabled = true;
     try {
-      const r = await fetch("/api/regenerate-title", {
+      const r = await mutationFetch("/api/regenerate-title", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: s.source, id: s.id }),
