@@ -894,8 +894,46 @@ def build_file_tree(root, max_depth=4, current_depth=0):
 
 
 def get_local_ip():
-    """Find Mac'ens lokale IP på WiFi/LAN (for mobile preview)."""
+    """Find Mac'ens lokale IP på WiFi/LAN (for mobile preview).
+
+    Foretrækker rigtige LAN-interfaces (WiFi, Ethernet) frem for VPN-tunnels.
+    Parses ifconfig: 'inet'-linjer med 'broadcast' er rigtige netværk, mens
+    point-to-point tunnels (Politiken-VPN, WireGuard, osv.) har '-->' i stedet.
+    Falder tilbage til den klassiske 8.8.8.8-trick hvis parsing fejler.
+    """
     import socket
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True,
+                             timeout=2).stdout
+        candidates = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line.startswith("inet ") or "broadcast" not in line:
+                continue
+            parts = line.split()
+            if len(parts) < 2 or parts[1] == "127.0.0.1":
+                continue
+            candidates.append(parts[1])
+        if candidates:
+            # Foretræk klassisk hjemme-WiFi → hotspot/Ethernet → 10.x
+            def rank(ip):
+                if ip.startswith("192.168."):
+                    return 0
+                if ip.startswith("172."):
+                    try:
+                        if 16 <= int(ip.split(".")[1]) <= 31:
+                            return 1
+                    except ValueError:
+                        pass
+                if ip.startswith("10."):
+                    return 2
+                return 3
+            candidates.sort(key=rank)
+            return candidates[0]
+    except Exception:
+        pass
+    # Fallback: spørg routing-tabellen via UDP-socket. Returnerer VPN-IP'en
+    # hvis en VPN er aktiv, men er bedre end ingenting.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
