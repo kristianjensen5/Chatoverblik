@@ -50,8 +50,14 @@ def load_cache():
 
 
 def save_cache(cache):
+    # Hold lock under json.dumps så cachen ikke ændrer størrelse mens vi
+    # serialiserer (RuntimeError: dictionary changed size during iteration).
+    # tmp.replace er atomisk på POSIX, så samtidige writes går ikke i stykker
+    # på disk — men sidste-skriver-vinder semantikken er nu indeholdt i locken.
+    with STATE_LOCK:
+        payload = json.dumps(cache, indent=2, ensure_ascii=False)
     tmp = CACHE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cache, indent=2, ensure_ascii=False))
+    tmp.write_text(payload)
     tmp.replace(CACHE_FILE)
 
 
@@ -562,7 +568,13 @@ def ai_title_and_summary(session, cache):
             "summary": f"(AI-fejl: {type(e).__name__})",
         }
 
-    cache[cache_key] = result
+    # Merge i stedet for at overskrive — ellers wiper vi user_title/pinned/
+    # user_cwd hvis brugeren rørte chatten mens AI-kaldet var in-flight.
+    # Hold lock omkring read-modify-write så samtidige AI-workers ikke racer.
+    with STATE_LOCK:
+        existing = cache.get(cache_key) or {}
+        existing.update(result)
+        cache[cache_key] = existing
     return result
 
 
@@ -1031,6 +1043,11 @@ STATE = {
     "sessions": [], "projects": [], "loading": True,
     "status": "Starter…", "cache": {}, "search_index": {},
 }
+# Re-entrant lock omkring alle read-modify-write på STATE og cache.
+# ThreadingHTTPServer + ThreadPoolExecutor til AI-kald gør at flere tråde
+# muterer samme dicts samtidig — uden lock kan vi tabe pin/rename eller få
+# 'dict changed size during iteration' under serialisering.
+STATE_LOCK = threading.RLock()
 
 
 def background_load():
@@ -1910,27 +1927,25 @@ En ting der overraskede dig i mønstrene"""
         if self.path == "/api/delete":
             source = data.get("source", "")
             sess_id = data.get("id", "")
-            # Find session
-            match = next((s for s in STATE["sessions"]
-                          if s["source"] == source and s["id"] == sess_id), None)
-            if not match:
-                self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
-                return
-            file_path = Path(match["file"])
-            try:
-                if file_path.exists():
-                    file_path.unlink()
-                # Fjern fra in-memory state
-                STATE["sessions"] = [s for s in STATE["sessions"]
-                                     if not (s["source"] == source and s["id"] == sess_id)]
-                STATE["search_index"].pop(f"{source}:{sess_id}", None)
-                STATE["cache"].pop(f"{source}:{sess_id}", None)
-                save_cache(STATE["cache"])
-                # Genopbyg projekt-index så chat-tællingen er korrekt
-                STATE["projects"] = build_projects_index(STATE["sessions"])
-                self._send_json({"ok": True})
-            except Exception as e:
-                self._send_json({"ok": False, "error": str(e)}, 500)
+            with STATE_LOCK:
+                match = next((s for s in STATE["sessions"]
+                              if s["source"] == source and s["id"] == sess_id), None)
+                if not match:
+                    self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
+                    return
+                file_path = Path(match["file"])
+                try:
+                    if file_path.exists():
+                        file_path.unlink()
+                    STATE["sessions"] = [s for s in STATE["sessions"]
+                                         if not (s["source"] == source and s["id"] == sess_id)]
+                    STATE["search_index"].pop(f"{source}:{sess_id}", None)
+                    STATE["cache"].pop(f"{source}:{sess_id}", None)
+                    save_cache(STATE["cache"])
+                    STATE["projects"] = build_projects_index(STATE["sessions"])
+                    self._send_json({"ok": True})
+                except Exception as e:
+                    self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
         if self.path == "/api/pin":
@@ -1938,18 +1953,19 @@ En ting der overraskede dig i mønstrene"""
             sess_id = data.get("id", "")
             pinned = bool(data.get("pinned"))
             key = f"{source}:{sess_id}"
-            cache = STATE["cache"]
-            entry = cache.get(key) or {}
-            if pinned:
-                entry["pinned"] = True
-            else:
-                entry.pop("pinned", None)
-            cache[key] = entry
-            save_cache(cache)
-            for s in STATE["sessions"]:
-                if s["source"] == source and s["id"] == sess_id:
-                    s["pinned"] = pinned
-                    break
+            with STATE_LOCK:
+                cache = STATE["cache"]
+                entry = cache.get(key) or {}
+                if pinned:
+                    entry["pinned"] = True
+                else:
+                    entry.pop("pinned", None)
+                cache[key] = entry
+                save_cache(cache)
+                for s in STATE["sessions"]:
+                    if s["source"] == source and s["id"] == sess_id:
+                        s["pinned"] = pinned
+                        break
             self._send_json({"ok": True, "pinned": pinned})
             return
 
@@ -1968,29 +1984,31 @@ En ting der overraskede dig i mønstrene"""
         if self.path == "/api/regenerate-title":
             source = data.get("source", "")
             sess_id = data.get("id", "")
-            session = next((s for s in STATE["sessions"]
-                            if s["source"] == source and s["id"] == sess_id), None)
-            if not session:
-                self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
-                return
-            cache = STATE["cache"]
-            key = f"{source}:{sess_id}"
-            # Bevar evt. user_title (manuel omdøbning) men fjern AI-felter
-            user_title = (cache.get(key) or {}).get("user_title", "")
-            pinned = (cache.get(key) or {}).get("pinned", False)
-            cache.pop(key, None)
+            with STATE_LOCK:
+                session = next((s for s in STATE["sessions"]
+                                if s["source"] == source and s["id"] == sess_id), None)
+                if not session:
+                    self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
+                    return
+                cache = STATE["cache"]
+                key = f"{source}:{sess_id}"
+                # Bevar evt. user_title (manuel omdøbning) men fjern AI-felter
+                user_title = (cache.get(key) or {}).get("user_title", "")
+                pinned = (cache.get(key) or {}).get("pinned", False)
+                cache.pop(key, None)
+            # AI-kald uden for locken (kan tage 5-30s) — ai_title_and_summary
+            # tager selv locken når den merger ind i cachen.
             result = ai_title_and_summary(session, cache)
-            # Genindsæt user-overrides
-            entry = cache.get(key) or {}
-            if user_title: entry["user_title"] = user_title
-            if pinned: entry["pinned"] = True
-            cache[key] = entry
-            save_cache(cache)
-            # Opdatér i memory
-            session["ai_title"] = result.get("title", "")
-            session["summary"] = result.get("summary", "")
-            if not user_title:
-                session["title"] = session["ai_title"]
+            with STATE_LOCK:
+                entry = cache.get(key) or {}
+                if user_title: entry["user_title"] = user_title
+                if pinned: entry["pinned"] = True
+                cache[key] = entry
+                save_cache(cache)
+                session["ai_title"] = result.get("title", "")
+                session["summary"] = result.get("summary", "")
+                if not user_title:
+                    session["title"] = session["ai_title"]
             self._send_json({"ok": True, "title": result.get("title"), "summary": result.get("summary")})
             return
 
@@ -2004,22 +2022,21 @@ En ting der overraskede dig i mønstrene"""
                 self._send_json({"ok": False, "error": "Mål-mappen findes ikke"}, 400)
                 return
             key = f"{source}:{sess_id}"
-            cache = STATE["cache"]
-            entry = cache.get(key) or {}
-            entry["user_cwd"] = target_cwd
-            cache[key] = entry
-            save_cache(cache)
-            # Opdatér i memory: cwd + project + cwd_hint
-            for s in STATE["sessions"]:
-                if s["source"] == source and s["id"] == sess_id:
-                    s["original_cwd"] = s.get("original_cwd") or s.get("cwd", "")
-                    s["cwd"] = target_cwd
-                    s["project"] = project_name_from_cwd(target_cwd)
-                    s["cwd_hint"] = ""  # afslå path-detekteret hint, brugeren har bestemt
-                    s["user_cwd"] = target_cwd
-                    break
-            # Genopbyg projekt-indekset så optællingen er korrekt
-            STATE["projects"] = build_projects_index(STATE["sessions"])
+            with STATE_LOCK:
+                cache = STATE["cache"]
+                entry = cache.get(key) or {}
+                entry["user_cwd"] = target_cwd
+                cache[key] = entry
+                save_cache(cache)
+                for s in STATE["sessions"]:
+                    if s["source"] == source and s["id"] == sess_id:
+                        s["original_cwd"] = s.get("original_cwd") or s.get("cwd", "")
+                        s["cwd"] = target_cwd
+                        s["project"] = project_name_from_cwd(target_cwd)
+                        s["cwd_hint"] = ""
+                        s["user_cwd"] = target_cwd
+                        break
+                STATE["projects"] = build_projects_index(STATE["sessions"])
             self._send_json({"ok": True,
                             "project": project_name_from_cwd(target_cwd)})
             return
@@ -2029,21 +2046,20 @@ En ting der overraskede dig i mønstrene"""
             sess_id = data.get("id", "")
             new_title = (data.get("title") or "").strip()[:120]
             key = f"{source}:{sess_id}"
-            cache = STATE["cache"]
-            entry = cache.get(key) or {}
-            if new_title:
-                entry["user_title"] = new_title
-            else:
-                # Tom titel = nulstil til AI-titel
-                entry.pop("user_title", None)
-            cache[key] = entry
-            save_cache(cache)
-            # Opdater i memory-state også
-            for s in STATE["sessions"]:
-                if s["source"] == source and s["id"] == sess_id:
-                    s["user_title"] = new_title
-                    s["title"] = new_title or s.get("ai_title") or fallback_title(s["first_user"])
-                    break
+            with STATE_LOCK:
+                cache = STATE["cache"]
+                entry = cache.get(key) or {}
+                if new_title:
+                    entry["user_title"] = new_title
+                else:
+                    entry.pop("user_title", None)
+                cache[key] = entry
+                save_cache(cache)
+                for s in STATE["sessions"]:
+                    if s["source"] == source and s["id"] == sess_id:
+                        s["user_title"] = new_title
+                        s["title"] = new_title or s.get("ai_title") or fallback_title(s["first_user"])
+                        break
             self._send_json({"ok": True, "title": new_title})
             return
 
