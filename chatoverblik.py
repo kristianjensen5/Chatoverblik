@@ -17,6 +17,7 @@ import http.server
 import json
 import os
 import re
+import secrets
 import subprocess
 import threading
 import time
@@ -30,6 +31,9 @@ HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude" / "projects"
 CODEX_DIR = HOME / ".codex" / "sessions"
 HERE = Path(__file__).parent
+# Masterversioner-roden = den mappe Chatoverblik/ ligger i. Derived så
+# Command Center virker på enhver brugers Mac uden at editere koden.
+MASTERVERSIONER_ROOT = HERE.parent
 CACHE_FILE = HERE / "cache.json"
 INDEX_FILE = HERE / "index.html"
 PORT = 7777
@@ -37,6 +41,7 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-haiku-4-5-20251001"
 PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
+PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 
 
 # ───────── Cache for AI-titler ─────────
@@ -1042,12 +1047,43 @@ def find_code_cli():
 STATE = {
     "sessions": [], "projects": [], "loading": True,
     "status": "Starter…", "cache": {}, "search_index": {},
+    # token -> {"cwd": str, "expires_at": float}. Genereres af /api/preview-info,
+    # tjekkes af _serve_preview. Sikrer at en LAN-besøgende skal have et levende
+    # QR-link for at kunne tilgå projekt-filer — ikke kun et gættet projekt-navn.
+    "preview_tokens": {},
 }
 # Re-entrant lock omkring alle read-modify-write på STATE og cache.
 # ThreadingHTTPServer + ThreadPoolExecutor til AI-kald gør at flere tråde
 # muterer samme dicts samtidig — uden lock kan vi tabe pin/rename eller få
 # 'dict changed size during iteration' under serialisering.
 STATE_LOCK = threading.RLock()
+
+
+def _new_preview_token(cwd):
+    """Generér et nyt token der mapper til cwd. Bruges som adgangstoken
+    i /preview/<token>/<sti>. Pruner samtidig udløbne tokens."""
+    token = secrets.token_urlsafe(16)
+    expires_at = time.time() + PREVIEW_TOKEN_TTL
+    with STATE_LOCK:
+        now = time.time()
+        STATE["preview_tokens"] = {
+            t: v for t, v in STATE["preview_tokens"].items()
+            if v["expires_at"] > now
+        }
+        STATE["preview_tokens"][token] = {"cwd": cwd, "expires_at": expires_at}
+    return token
+
+
+def _resolve_preview_token(token):
+    """Returnér cwd hvis token er gyldig og ikke udløbet, ellers None."""
+    with STATE_LOCK:
+        entry = STATE["preview_tokens"].get(token)
+        if not entry:
+            return None
+        if entry["expires_at"] < time.time():
+            STATE["preview_tokens"].pop(token, None)
+            return None
+        return entry["cwd"]
 
 
 def background_load():
@@ -1132,35 +1168,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _serve_preview(self):
-        """Server filer fra en projektmappe under /preview/<base64-cwd>/<sti>."""
-        import base64, mimetypes
+        """Server filer fra en projektmappe under /preview/<token>/<sti>.
+
+        Token genereres af /api/preview-info når brugeren klikker 'Mobile Preview'
+        og udløber efter PREVIEW_TOKEN_TTL. Erstatter den gamle base64-cwd som
+        var trivielt at gætte (projekt-stier er kendte).
+        """
+        import mimetypes
         from urllib.parse import unquote, urlparse
         try:
             # Brug urlparse for at strippe query-string (?v=cachebust osv.)
-            # Ellers ville assets med cache-busting give 404.
             path_only = urlparse(self.path).path
             rest = path_only[len("/preview/"):]
             parts = rest.split("/", 1)
-            encoded = parts[0]
+            token = parts[0]
             sub_path = unquote(parts[1]) if len(parts) > 1 else "index.html"
             if not sub_path or sub_path.endswith("/"):
                 sub_path = (sub_path + "index.html").lstrip("/")
-            # Tilføj padding så base64-decoding altid virker
-            padded = encoded + "=" * (-len(encoded) % 4)
-            cwd = base64.urlsafe_b64decode(padded).decode("utf-8")
         except Exception:
             self.send_response(400)
             self.end_headers()
             return
 
-        # Sikkerhed 1: cwd skal være kendt af appen (en eksisterende projektmappe)
-        valid_cwds = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
-        # Tillad også eksplicitte projekt-cwds fra projects-index
-        valid_cwds |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
-        if cwd.rstrip("/") not in valid_cwds:
+        # Sikkerhed 1: token skal være gyldig og ikke udløbet
+        cwd = _resolve_preview_token(token)
+        if not cwd:
             self.send_response(403)
             self.end_headers()
-            self.wfile.write(b"Ukendt projekt-mappe")
+            self.wfile.write(b"Preview-link er udl\xc3\xb8bet eller ugyldigt")
             return
 
         # Sikkerhed 2: ingen path-traversal
@@ -1240,7 +1275,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # ENHVER absolut sti og åbne for path-traversal.
             valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
             valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
-            valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            valid_roots.add(str(MASTERVERSIONER_ROOT))
             valid_roots = {r for r in valid_roots if r}
             cwd_norm = cwd.rstrip("/")
             allowed = any(cwd_norm == r or cwd_norm.startswith(r + "/") for r in valid_roots)
@@ -1263,7 +1298,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # ENHVER absolut sti og åbne for path-traversal.
             valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
             valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
-            valid_roots.add("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            valid_roots.add(str(MASTERVERSIONER_ROOT))
             valid_roots = {r for r in valid_roots if r}
             try:
                 target = Path(file_path).resolve()
@@ -1297,7 +1332,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/widgets":
-            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/context/04_widgets.md")
+            widgets_file = MASTERVERSIONER_ROOT / "context" / "04_widgets.md"
             if not widgets_file.exists():
                 self._send_json({"ok": True, "markdown": "", "exists": False})
                 return
@@ -1315,7 +1350,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/all-folders":
             # Alle umiddelbare undermapper i Masterversioner — inkl. tomme,
             # så man kan flytte chats til mapper uden eksisterende chats
-            root = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+            root = MASTERVERSIONER_ROOT
             folders = []
             if root.exists():
                 skip = {"node_modules", "__pycache__", ".wrangler",
@@ -1327,7 +1362,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json({"folders": folders})
             return
         if self.path.startswith("/api/preview-info"):
-            import base64
             from urllib.parse import urlparse, parse_qs, quote
             qs = parse_qs(urlparse(self.path).query)
             cwd = (qs.get("cwd") or [""])[0]
@@ -1356,16 +1390,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             hf_set = set(html_files)
             index_file = next((p for p in preferred if p in hf_set), html_files[0])
             ip = get_local_ip()
-            encoded = base64.urlsafe_b64encode(cwd.rstrip("/").encode("utf-8")).decode("ascii").rstrip("=")
+            # Token erstatter den tidligere base64-cwd: ikke-gættelig adgangs-
+            # nøgle med 1-times TTL. Frontend bruger token til at omkonstruere
+            # URL'en hvis brugeren skifter HTML-fil i dropdown.
+            token = _new_preview_token(cwd.rstrip("/"))
             # URL-encode hver sti-komponent så filer med æ/ø/å og mellemrum virker
             url_path = "/".join(quote(part) for part in index_file.split("/"))
-            url = f"http://{ip}:{PORT}/preview/{encoded}/{url_path}"
+            url = f"http://{ip}:{PORT}/preview/{token}/{url_path}"
             self._send_json({
                 "ok": True,
                 "ip": ip,
                 "port": PORT,
                 "url": url,
-                "encoded_cwd": encoded,
+                "token": token,
                 "default_file": index_file,
                 "html_files": html_files,
             })
@@ -1649,6 +1686,19 @@ Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværend
             if not cwd or not Path(cwd).is_dir():
                 self._send_json({"ok": False, "error": "Mappe findes ikke"}, 400)
                 return
+            # Sikkerhed: HANDOVER.md skrives til disk — tillad kun mapper
+            # under Masterversioner. Uden dette kan en CSRF-side eller buggy
+            # klient få os til at overskrive HANDOVER.md vilkårlige steder.
+            try:
+                target = Path(cwd).resolve()
+            except Exception:
+                self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
+                return
+            root_str = str(MASTERVERSIONER_ROOT.resolve())
+            if not (str(target) == root_str or str(target).startswith(root_str + "/")):
+                self._send_json({"ok": False,
+                                "error": "Mappen er ikke under Masterversioner"}, 403)
+                return
             if not ANTHROPIC_KEY:
                 self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
                 return
@@ -1872,14 +1922,14 @@ En ting der overraskede dig i mønstrene"""
             if ptype not in ("arbejde", "privat"):
                 self._send_json({"ok": False, "error": "Type skal være 'arbejde' eller 'privat'"}, 400)
                 return
-            base = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner") / name
+            base = MASTERVERSIONER_ROOT / name
             if base.exists():
                 self._send_json({"ok": False, "error": f"Mappen findes allerede: {base}"}, 400)
                 return
             try:
                 base.mkdir(parents=True)
                 # STATUS.md fra skabelon i context/
-                template = (Path("/Users/kristian.jensen/Documents/CODE/Masterversioner")
+                template = (MASTERVERSIONER_ROOT
                            / "context" / "06_status_template.md")
                 status_text = template.read_text(encoding="utf-8") if template.exists() else ""
                 status_text = (status_text
@@ -1909,7 +1959,7 @@ En ting der overraskede dig i mønstrene"""
         if self.path == "/api/widgets":
             # POST: gem context/04_widgets.md
             content = data.get("markdown", "")
-            widgets_file = Path("/Users/kristian.jensen/Documents/CODE/Masterversioner/context/04_widgets.md")
+            widgets_file = MASTERVERSIONER_ROOT / "context" / "04_widgets.md"
             try:
                 # Sørg for at context-mappen findes
                 widgets_file.parent.mkdir(exist_ok=True)

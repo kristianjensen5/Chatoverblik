@@ -2740,7 +2740,11 @@ async function showMobilePreview(cwd, projectName) {
     if ($("preview-file")) {
       $("preview-file").onchange = (e) => {
         const newFile = e.target.value;
-        const newUrl = `http://${d.ip}:${d.port}/preview/${d.encoded_cwd}/${encodeURIComponent(newFile)}`;
+        // URL-encode hver sti-komponent (samme som backend) så filer med
+        // æ/ø/å og mellemrum virker. encodeURIComponent encoder også "/"
+        // til %2F, så split først og join med rå "/".
+        const encodedPath = newFile.split("/").map(encodeURIComponent).join("/");
+        const newUrl = `http://${d.ip}:${d.port}/preview/${d.token}/${encodedPath}`;
         $("preview-url").value = newUrl;
         renderQR(newUrl);
       };
