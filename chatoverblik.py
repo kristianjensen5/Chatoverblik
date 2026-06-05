@@ -43,6 +43,48 @@ PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 
+# Alle modeller frontend må vælge. Tidligere copy-pasted i 3+ endpoints med
+# forskellige allowlists — workflow-analysis udelukkede tilfældigt haiku.
+ALLOWED_MODELS = {
+    "claude-sonnet-4-6",
+    "claude-opus-4-8",
+    "claude-haiku-4-5-20251001",
+}
+DEFAULT_MODEL = "claude-sonnet-4-6"
+
+
+def pick_model(requested):
+    """Normalisér en bruger-valgt model — falder tilbage til default ved ukendt."""
+    return requested if requested in ALLOWED_MODELS else DEFAULT_MODEL
+
+
+def call_anthropic(prompt, *, model=DEFAULT_MODEL, max_tokens=1000, timeout=60):
+    """POST til Anthropic Messages API. Returnerer text-indholdet.
+
+    Tidligere copy-pasted 4 steder med små variationer i max_tokens/timeout.
+    Raiser urllib.error.URLError / json.JSONDecodeError ved fejl — caller
+    afgør hvordan disse skal håndteres.
+    """
+    body = json.dumps({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if b.get("type") == "text")
+
 
 # ───────── Cache for AI-titler ─────────
 def load_cache():
@@ -539,27 +581,8 @@ def ai_title_and_summary(session, cache):
         f"\"\"\"\n{session['first_user'][:PROMPT_PREVIEW_CHARS]}\n\"\"\""
     )
 
-    body = json.dumps({
-        "model": MODEL,
-        "max_tokens": 300,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=45) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        text = call_anthropic(prompt, model=MODEL, max_tokens=300, timeout=45)
         # Find første { … } i tilfælde af at modellen alligevel skriver lidt rundt om
         m = re.search(r"\{.*\}", text, re.S)
         parsed = json.loads(m.group(0)) if m else json.loads(text)
@@ -1680,30 +1703,10 @@ Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværend
                     "error": "ANTHROPIC_API_KEY mangler — kan ikke køre analyse"}, 400)
                 return
 
-            model_choice = data.get("model", "claude-sonnet-4-6")
-            allowed = {"claude-sonnet-4-6", "claude-opus-4-8"}
-            if model_choice not in allowed:
-                model_choice = "claude-sonnet-4-6"
-            body = json.dumps({
-                "model": model_choice,
-                "max_tokens": 4000,
-                "messages": [{"role": "user", "content": prompt}],
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                },
-                method="POST",
-            )
+            model_choice = pick_model(data.get("model"))
             try:
-                with urllib.request.urlopen(req, timeout=180) as resp:
-                    api_data = json.loads(resp.read().decode("utf-8"))
-                text = "".join(b.get("text", "") for b in api_data.get("content", [])
-                               if b.get("type") == "text")
+                text = call_anthropic(prompt, model=model_choice,
+                                      max_tokens=4000, timeout=180)
                 # Gem til disk for re-visning (metadata i kommentar-linje)
                 analysis_file = HERE / "analysis.md"
                 ts = time.strftime("%Y-%m-%d %H:%M")
@@ -1817,28 +1820,10 @@ eller chats hvis nævnt.
 
 Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
 
-            model_choice = data.get("model", "claude-sonnet-4-6")
-            allowed = {"claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"}
-            if model_choice not in allowed:
-                model_choice = "claude-sonnet-4-6"
-            body = json.dumps({
-                "model": model_choice,
-                "max_tokens": 2500,
-                "messages": [{"role": "user", "content": prompt}],
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=body,
-                headers={"Content-Type": "application/json",
-                         "x-api-key": ANTHROPIC_KEY,
-                         "anthropic-version": "2023-06-01"},
-                method="POST",
-            )
+            model_choice = pick_model(data.get("model"))
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    api_data = json.loads(resp.read().decode("utf-8"))
-                text = "".join(b.get("text", "") for b in api_data.get("content", [])
-                               if b.get("type") == "text")
+                text = call_anthropic(prompt, model=model_choice,
+                                      max_tokens=2500, timeout=120)
                 # Gem som HANDOVER.md i projektmappen
                 handover_file = proj_path / "HANDOVER.md"
                 ts = time.strftime("%Y-%m-%d %H:%M")
@@ -1920,28 +1905,10 @@ Vær konkret, kort, ærlig. Skriv på dansk.
 ## En enkelt observation
 En ting der overraskede dig i mønstrene"""
 
-            model_choice = data.get("model", "claude-sonnet-4-6")
-            allowed = {"claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"}
-            if model_choice not in allowed:
-                model_choice = "claude-sonnet-4-6"
-            body = json.dumps({
-                "model": model_choice,
-                "max_tokens": 2000,
-                "messages": [{"role": "user", "content": prompt}],
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=body,
-                headers={"Content-Type": "application/json",
-                         "x-api-key": ANTHROPIC_KEY,
-                         "anthropic-version": "2023-06-01"},
-                method="POST",
-            )
+            model_choice = pick_model(data.get("model"))
             try:
-                with urllib.request.urlopen(req, timeout=90) as resp:
-                    api_data = json.loads(resp.read().decode("utf-8"))
-                text = "".join(b.get("text", "") for b in api_data.get("content", [])
-                               if b.get("type") == "text")
+                text = call_anthropic(prompt, model=model_choice,
+                                      max_tokens=2000, timeout=90)
                 ts = time.strftime("%Y-%m-%d %H:%M")
                 self._send_json({"ok": True, "markdown": text,
                                 "generated_at": ts, "model": model_choice,
