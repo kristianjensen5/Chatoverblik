@@ -24,8 +24,18 @@ og kør de små test-kommandoer.
 
 ### 1. Hent Command Center
 
-Spørg Kristian om en zip-fil eller adgang til GitHub-repoet. Pak den ud
-**et sted hvor du har plads til en projektmappe**. F.eks.:
+Download fra GitHub:
+
+**Uden git-kendskab** — gå til <https://github.com/kristianjensen5/Chatoverblik>,
+klik den grønne **Code**-knap → **Download ZIP** → pak ud.
+
+**Med git** — i Terminal:
+```bash
+git clone https://github.com/kristianjensen5/Chatoverblik.git
+```
+
+Læg den mappe **et sted hvor du har plads til projektmapper ved siden af**.
+F.eks.:
 
 ```
 ~/Documents/CODE/MitVibeCoding/Chatoverblik/
@@ -40,6 +50,10 @@ Eller hvis du allerede har en mappe hvor dine eksperimenter ligger:
 > 💡 **Vigtigt:** Den mappe Chatoverblik ligger I, bliver behandlet som din
 > "projekt-rod". Værktøjet kan kun se filer/projekter i den mappe og dens
 > undermapper. Vælg derfor en placering hvor dine kode-projekter også ligger.
+
+> 🔄 **Opdateringer:** Hvis du har klonet med `git`, hent nyeste version med
+> `git pull` i Chatoverblik-mappen. Hvis du downloadede ZIP, hent en ny zip
+> samme sted og udskift mappen.
 
 ### 2. Tilføj din Anthropic API-key (valgfri)
 
