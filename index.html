@@ -1856,7 +1856,7 @@ async function saveRename(source, id, title) {
 
 async function openChat(source, id) {
   $("modal-body").innerHTML = '<div class="empty">Henter chat…</div>';
-  $("modal-bg").classList.add("open");
+  openModal();
   try {
     const r = await fetch(`/api/chat/${source}/${encodeURIComponent(id)}`);
     const data = await r.json();
@@ -1955,7 +1955,7 @@ function renderChatDetail(s, messages) {
     </details>
   `;
 
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   $("modal-rename-btn").onclick = () => {
     const h2 = $("modal-title");
@@ -2119,6 +2119,14 @@ function renderChatDetail(s, messages) {
   };
 }
 
+// Vis modal-baggrund og bind close-knap. Skal kaldes efter at modal-body's
+// innerHTML er sat (med en <button class="close">). Tidligere copy-pasted
+// 8 steder som to identiske linjer efter hver innerHTML-tildeling.
+function openModal() {
+  $("modal-bg").classList.add("open");
+  const closeBtn = $("modal-body").querySelector(".close");
+  if (closeBtn) closeBtn.onclick = closeModal;
+}
 function closeModal() { $("modal-bg").classList.remove("open"); }
 
 $("modal-bg").addEventListener("click", e => {
@@ -2359,8 +2367,7 @@ async function showAnalysis(forceNew = false, model = "claude-sonnet-4-6") {
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📊 Workflow-analyse</h2>
     <div class="analysis-loading" id="analysis-loading">Henter analyse…</div>
     <div id="analysis-result" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   const endpoint = forceNew ? "/api/workflow-analysis" : "/api/workflow-analysis-cached";
   if (forceNew) {
@@ -2418,8 +2425,7 @@ async function showHandover(cwd, projectName, forceNew = false, model = "claude-
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Genoptag-guide: ${escapeHTML(projectName)}</h2>
     <div class="analysis-loading" id="analysis-loading">${forceNew ? "Genererer guide (20-40 sek)…" : "Indlæser…"}</div>
     <div id="analysis-result" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   try {
     const r = await fetch("/api/project-handover", {
@@ -2457,8 +2463,7 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📅 Ugens retro</h2>
     <div class="analysis-loading" id="analysis-loading">Henter sidste 7 dages chats og analyserer…</div>
     <div id="analysis-result" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   try {
     const r = await fetch("/api/weekly-retro", {
@@ -2524,8 +2529,7 @@ function showNewProject() {
       </div>
       <div id="np-feedback" style="font-size:13px;"></div>
     </div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
   $("np-cancel").onclick = closeModal;
   $("np-submit").onclick = async () => {
     const name = $("np-name").value.trim();
@@ -2605,8 +2609,7 @@ async function showFileBrowser(cwd, projectName) {
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📄 Filer i ${escapeHTML(projectName)}</h2>
     <div class="analysis-loading" id="files-loading">Indlæser filtræ…</div>
     <div id="files-result" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   try {
     const r = await fetch(`/api/file-tree?cwd=${encodeURIComponent(cwd)}`);
@@ -2698,8 +2701,7 @@ async function showWidgets() {
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📚 Komponent-bibliotek</h2>
     <div class="analysis-loading" id="widgets-loading">Indlæser WIDGETS.md…</div>
     <div id="widgets-result" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   try {
     const r = await fetch("/api/widgets");
@@ -2769,8 +2771,7 @@ async function showMobilePreview(cwd, projectName) {
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📱 Mobile Preview: ${escapeHTML(projectName)}</h2>
     <div id="preview-loading" class="analysis-loading">Finder lokal IP…</div>
     <div id="preview-body" style="display:none;"></div>`;
-  $("modal-bg").classList.add("open");
-  $("modal-body").querySelector(".close").onclick = closeModal;
+  openModal();
 
   try {
     const r = await fetch(`/api/preview-info?cwd=${encodeURIComponent(cwd)}`);
@@ -2864,7 +2865,20 @@ if (overviewEl) {
 
 loadPrefs();
 loadSessions();
-setInterval(loadSessions, 4000);
+// Polling stoppes mens fanen er skjult — sparer CPU og netværkstrafik når
+// browser-fanen ligger i baggrunden (Safari Web App, anden VS Code-fane, osv.).
+// loadSessions() køres igen straks når fanen kommer tilbage i forgrunden så
+// UI'et ikke viser stale data.
+let pollingTimer = setInterval(loadSessions, 4000);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+  } else if (!pollingTimer) {
+    loadSessions();
+    pollingTimer = setInterval(loadSessions, 4000);
+  }
+});
 </script>
 </body>
 </html>
