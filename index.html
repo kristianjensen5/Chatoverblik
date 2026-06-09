@@ -1900,6 +1900,7 @@ function renderChatDetail(s, messages) {
     </div>
     <div class="modal-title-row">
       <h2 id="modal-title">${escapeHTML(title)}</h2>
+      <button class="rename-btn" id="modal-resume-btn" title="Genoptag i ny chat med AI-genereret brief">🚀 Genoptag</button>
       <button class="rename-btn" id="modal-move-btn" title="Flyt til andet projekt">📁 Flyt</button>
       <button class="rename-btn" id="modal-regenerate-btn" title="Lav ny AI-titel + resumé">↻ Ny AI-titel</button>
       <button class="rename-btn" id="modal-rename-btn">✎ Omdøb</button>
@@ -2064,6 +2065,8 @@ function renderChatDetail(s, messages) {
       }
     };
   };
+
+  $("modal-resume-btn").onclick = () => showResume(s);
 
   $("modal-regenerate-btn").onclick = async () => {
     const btn = $("modal-regenerate-btn");
@@ -2253,6 +2256,102 @@ function modelPicker(idAttr) {
       <option value="claude-sonnet-4-6">Sonnet 4.6 (hurtigere, ~$0.50)</option>
       <option value="claude-opus-4-8">Opus 4.8 (dybere, ~$2.50)</option>
     </select>`;
+}
+
+// Genoptag-chat: AI-genereret brief + kopier-til-clipboard + åbn VS Code med
+// rigtige sidebar. Erstatter "åbn fuld gammel chat"-flowet med en frisk start
+// hvor modellen IKKE er forankret i gamle tool-kald og forældede file-states.
+async function showResume(session, model = "claude-sonnet-4-6") {
+  const closeModalForResume = closeModal;
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Genoptag: ${escapeHTML(session.title || "(uden titel)")}</h2>
+    <div class="analysis-loading" id="resume-loading">Genererer brief (15-30s)…</div>
+    <div id="resume-result" style="display:none;"></div>`;
+  $("modal-bg").classList.add("open");
+  $("modal-body").querySelector(".close").onclick = closeModalForResume;
+
+  try {
+    const r = await fetch("/api/resume-summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: session.source, id: session.id, model }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      $("resume-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "ukendt")}</div>`;
+      return;
+    }
+    $("resume-loading").style.display = "none";
+    $("resume-result").style.display = "block";
+    const modelTag = d.model ? ` · ${MODEL_LABELS[d.model] || d.model}` : "";
+    $("resume-result").innerHTML = `
+      <div class="analysis-meta">
+        <span>${escapeHTML(d.project)} · ${d.generated_at}${modelTag}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${modelPicker("resume-model")}
+          <button id="regen-resume">↻ Lav nyt brief</button>
+        </span>
+      </div>
+      <div class="section-label" style="margin-top:14px;">Genereret brief (kan redigeres)</div>
+      <textarea id="resume-brief" style="width:100%;min-height:280px;padding:12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;font-family:ui-monospace,Menlo,monospace;line-height:1.5;background:#f6f4ee;margin-bottom:14px;">${escapeHTML(d.summary)}</textarea>
+
+      <div class="section-label">Din nye forespørgsel (valgfri)</div>
+      <textarea id="resume-followup" placeholder="Hvad vil du arbejde videre med? F.eks. 'Lad os fortsætte med næste skridt' eller 'Jeg er stødt på X, hjælp mig med...'" style="width:100%;min-height:80px;padding:10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;margin-bottom:14px;"></textarea>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button id="resume-launch-claude" style="background:var(--accent);color:#fff;border:none;padding:10px 20px;font-weight:700;border-radius:4px;cursor:pointer;font:inherit;">📋 Kopier + åbn i Claude</button>
+        <button id="resume-launch-codex" style="background:var(--ink);color:#fff;border:none;padding:10px 20px;font-weight:700;border-radius:4px;cursor:pointer;font:inherit;">📋 Kopier + åbn i Codex</button>
+        <button id="resume-copy-only" style="background:transparent;color:var(--ink);border:1px solid var(--line-strong);padding:10px 20px;font-weight:700;border-radius:4px;cursor:pointer;font:inherit;">📋 Kun kopier</button>
+      </div>
+      <div style="margin-top:14px;padding:10px 14px;background:#fff7e0;border-left:3px solid #d4a017;border-radius:0 4px 4px 0;font-size:12px;color:#8a6500;line-height:1.5;">
+        <strong>Sådan virker det:</strong> Knappen kopierer briefet + din forespørgsel til clipboard og åbner VS Code med Claude/Codex-sidebaren. Klik <strong>+</strong> for ny chat og paste med ⌘V. Den nye chat tagges automatisk under projektet ${escapeHTML(d.project)}.
+      </div>`;
+    if (d.model) $("resume-model").value = d.model;
+
+    const buildPrompt = () => {
+      const brief = $("resume-brief").value.trim();
+      const followup = $("resume-followup").value.trim();
+      const followupSection = followup
+        ? `\n\n---\n\n## Min nye forespørgsel\n\n${followup}`
+        : "\n\n---\n\nFortsæt fra 'Hvad mangler' i briefet ovenfor.";
+      return `# Genoptag chat fra projekt: ${d.project}\n\n${brief}${followupSection}`;
+    };
+
+    async function launchIn(source) {
+      try {
+        await navigator.clipboard.writeText(buildPrompt());
+      } catch (e) {
+        toast("Kunne ikke kopiere: " + e.message);
+        return;
+      }
+      try {
+        await fetch("/api/open-in-windsurf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source, cwd: d.cwd, mode: "new-chat" }),
+        });
+      } catch (e) {
+        toast("Prompt kopieret, men kunne ikke åbne VS Code: " + e.message);
+        return;
+      }
+      toast(`Prompt kopieret. Klik + i ${source === "claude" ? "Claude" : "Codex"}-sidebaren og paste med ⌘V`);
+      closeModalForResume();
+    }
+
+    $("resume-launch-claude").onclick = () => launchIn("claude");
+    $("resume-launch-codex").onclick = () => launchIn("codex");
+    $("resume-copy-only").onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(buildPrompt());
+        toast("Prompt kopieret til clipboard");
+      } catch (e) {
+        toast("Kunne ikke kopiere: " + e.message);
+      }
+    };
+    $("regen-resume").onclick = () => showResume(session, $("resume-model").value);
+  } catch (e) {
+    $("resume-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
 }
 
 async function showAnalysis(forceNew = false, model = "claude-sonnet-4-6") {
