@@ -2100,6 +2100,96 @@ En ting der overraskede dig i mønstrene"""
             self._send_json({"ok": True, "title": result.get("title"), "summary": result.get("summary")})
             return
 
+        if self.path == "/api/resume-summary":
+            # Genererer et 'genoptag-brief': kompakt resumé af en gammel chat
+            # til indsætning som første prompt i en ny chat. Lader brugeren
+            # fortsætte med frisk kontekst i stedet for at åbne den fulde chat
+            # (som ville tvinge modellen til at læse alle tidligere tool-kald).
+            source = data.get("source", "")
+            sess_id = data.get("id", "")
+            with STATE_LOCK:
+                session = next((s for s in STATE["sessions"]
+                                if s["source"] == source and s["id"] == sess_id), None)
+            if not session:
+                self._send_json({"ok": False, "error": "Chat ikke fundet"}, 404)
+                return
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
+                return
+            # Hent chat-content som læselig sekvens af user/assistant-beskeder
+            try:
+                chat_msgs = render_chat_for_view(session)
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"Kunne ikke læse chat: {e}"}, 500)
+                return
+            if not chat_msgs:
+                self._send_json({"ok": False, "error": "Chatten er tom"}, 400)
+                return
+            # Cap chat-tekst — meget lange chats sender vi de første ~80k + de
+            # sidste ~40k tegn af (intro + nylige beslutninger). Holder os under
+            # Sonnet's context window og fokuserer på det vigtigste.
+            chat_text_full = "\n\n".join(
+                f"[{m['role'].upper()}] {m['text']}" for m in chat_msgs
+            )
+            if len(chat_text_full) > 120_000:
+                chat_text = (chat_text_full[:80_000]
+                             + "\n\n[…midten af chatten klippet…]\n\n"
+                             + chat_text_full[-40_000:])
+            else:
+                chat_text = chat_text_full
+            project_name = session.get("project") or "(ukendt projekt)"
+            prompt = f"""Du laver et 'genoptag-brief' til Kristian. Han har \
+tidligere haft denne chat om projektet '{project_name}' og vil fortsætte \
+arbejdet i en NY chat med frisk kontekst (i stedet for at åbne den fulde \
+gamle chat). Briefet bliver indsat som første prompt i den nye chat.
+
+Skriv på dansk. Max 400 ord. Brug markdown. Vær KONKRET — citér filnavne, \
+specifikke beslutninger, faktiske kommandoer.
+
+Format:
+
+## Hvad chatten handlede om
+1-2 sætninger der fanger essensen.
+
+## Hvad blev besluttet
+2-4 bullets med konkrete beslutninger der blev truffet (arkitektur, biblioteker, \
+flow). Tag KUN ting med der faktisk blev konkluderet — ikke ting der bare blev \
+nævnt.
+
+## Hvad virker / er færdigt
+Bullets med tilstand der er afsluttet og deployet/testet.
+
+## Hvad mangler / blev ikke løst
+Bullets med åbne ender Kristian skal videre med.
+
+## Filer der blev rørt
+Op til 5 centrale filer (med kort beskrivelse af hvad de gør i konteksten).
+
+## Vigtige fælder
+Antagelser eller bugs Kristian skal være OBS på — 'hvis du gør X, så fejler Y'. \
+Spring sektionen over hvis der ingen er.
+
+CHAT-INDHOLD:
+{chat_text}"""
+            model_choice = pick_model(data.get("model"))
+            try:
+                text = call_anthropic(prompt, model=model_choice,
+                                      max_tokens=2000, timeout=90)
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                self._send_json({
+                    "ok": True,
+                    "summary": text,
+                    "project": project_name,
+                    "cwd": session.get("cwd", ""),
+                    "source": source,
+                    "model": model_choice,
+                    "generated_at": ts,
+                    "original_title": session.get("title", ""),
+                })
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if self.path == "/api/move-chat":
             # Flyt en chat til en anden projektmappe — gemmer user_cwd-override
             # i cache.json uden at røre selve .jsonl-filen
