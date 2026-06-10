@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** (ikke pushed endnu)
-**Senest opdateret:** 2026-06-05
+**Senest opdateret:** 2026-06-10
 
 ---
 
@@ -63,7 +63,11 @@ Multi-agent kode-review (`ULTRA_REVIEW.md`) fandt 15 fund — alle nu lukket ell
 - ✅ **PR 3** data-sikkerhed: `STATE_LOCK = threading.RLock()` + cache-merge i stedet for overwrite → pin/rename overlever cold-start AI-køen
 - ✅ **PR 4** UX: polling skipper når bruger-mutationer er in-flight + triggerer fresh poll efter mutation → ingen "spring tilbage" på rename/pin/delete
 - ✅ **PR 5** multi-user: `MASTERVERSIONER_ROOT = HERE.parent` (afledt), preview-token (1-times TTL) erstatter base64-cwd, project-handover validerer mod root. Plus `get_local_ip()` foretrækker LAN frem for VPN-tunnel (QR'en pegede tidligere på VPN-IP)
-- 🟡 **PR 6** tech-debt (åben, mangler review/merge): `call_anthropic()` helper samler 4 kopier af urllib-kode, `openModal()` collapse 8 kopier af modal-skelet, visibility-aware polling (stopper når fanen er skjult)
+- ✅ **PR 6** tech-debt (merget): `call_anthropic()` helper samler 4 kopier af urllib-kode, `openModal()` collapse 8 kopier af modal-skelet, visibility-aware polling (stopper når fanen er skjult)
+- ✅ **PR 7-8** docs + 🚀 Genoptag-chat: INSTALL.md til kolleger, `/api/resume-summary`-endpoint der genererer AI-brief af en gammel chat til indsætning i ny chat
+
+### Genoptag-chat verificeret (2026-06-10)
+- ✅ **🚀 Genoptag virker end-to-end** — testet live mod kørende server: `/api/resume-summary` returnerer `ok: True` med korrekt markdown-brief (bruger `call_anthropic()`-helper fra PR 6, default-model `claude-sonnet-4-6`). Frontend-felterne (`summary`/`project`/`model`) matcher response. Ingen reel bug tilbage — punktet manglede kun verifikation
 
 ### Ikke startet
 - ❌ Per-projekt LESSONS.md-viewer
@@ -75,7 +79,7 @@ Multi-agent kode-review (`ULTRA_REVIEW.md`) fandt 15 fund — alle nu lukket ell
 
 ## Næste skridt
 
-1. **Test og merge PR 6** (tech-debt) — sidste i ultra-review-serien. Tjek at alle 8 modaler stadig åbner/lukker og at AI-endpoints svarer.
+1. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
 2. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
 3. **Distribuér Command Center til første kollega** — alle distribution-blockers er ude. Tjek først at de hardkodede stier ikke længere er et issue (PR 5).
 4. **Vent på redaktør-feedback** på politiken-widget-services.md
