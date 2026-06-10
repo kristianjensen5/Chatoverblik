@@ -1552,7 +1552,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
                 return
             source = data.get("source", "")
-            workspace_root = find_workspace_root(cwd)
+            # keep_cwd=True: åbn præcis på cwd uden at scanne opad efter
+            # CLAUDE.md. Bruges fra Genoptag-flowet, så nye chats arver den
+            # ORIGINALE chats undermappe og grupperes korrekt — ikke den
+            # bredere Masterversioner-rod. Claude læser stadig CLAUDE.md
+            # selv ved at scanne forældre.
+            keep_cwd = bool(data.get("keep_cwd", False))
+            workspace_root = cwd if keep_cwd else find_workspace_root(cwd)
 
             # Find projektnavn til farvevalg + workspace-fil
             project_name = Path(cwd).name if cwd != workspace_root else Path(workspace_root).name
