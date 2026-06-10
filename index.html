@@ -199,6 +199,41 @@
     border-radius: 2px;
     font-size: 11px;
   }
+  .server-health.dead .app-path-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .server-health.dead .app-path {
+    flex: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+    font-size: 10px;
+    padding: 3px 6px;
+    user-select: all;
+  }
+  .server-health.dead .app-path-copy {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    color: #8a0000;
+    background: rgba(0,0,0,0.06);
+    border: 1px solid rgba(138,0,0,0.25);
+    border-radius: 3px;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+  .server-health.dead .app-path-copy:hover {
+    background: rgba(0,0,0,0.12);
+  }
+  .server-health.dead .app-path-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 10px;
+    opacity: 0.85;
+  }
 
   .sidebar .section-label {
     font-size: 10px;
@@ -1370,7 +1405,29 @@ function setServerHealth(state) {
         Dobbeltklik <code>start.command</code> i Chatoverblik-mappen.
         Når terminal-vinduet åbner, vil denne badge skifte til grøn
         igen automatisk inden for få sekunder.
+        <div class="app-path-row">
+          <code class="app-path">__APP_DIR__</code>
+          <button class="app-path-copy" onclick="copyAppPath(this)">📋 Kopiér sti</button>
+        </div>
+        <span class="app-path-hint">Åbn Finder → tryk ⌘⇧G → indsæt stien for at hoppe direkte til mappen.</span>
       </div>`;
+  }
+}
+
+async function copyAppPath(btn) {
+  const path = btn.parentElement.querySelector(".app-path")?.textContent || "";
+  try {
+    await navigator.clipboard.writeText(path);
+    const orig = btn.textContent;
+    btn.textContent = "✓ Kopieret";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (e) {
+    // Fallback: markér teksten så brugeren kan kopiere manuelt
+    const range = document.createRange();
+    range.selectNodeContents(btn.parentElement.querySelector(".app-path"));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 }
 

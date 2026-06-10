@@ -1301,7 +1301,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_preview()
             return
         if self.path == "/" or self.path.startswith("/index.html"):
-            self._send_file(INDEX_FILE, "text/html; charset=utf-8")
+            # Injicér app-mappens absolutte sti så "Server kører ikke"-badgen
+            # kan vise hvor start.command ligger (browseren kender ikke selv
+            # filsystem-stien når siden serveres over http).
+            html = INDEX_FILE.read_text(encoding="utf-8")
+            html = html.replace("__APP_DIR__", str(HERE))
+            body = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
             return
         if self.path == "/icon.png":
             icon = HERE / "icon.png"
