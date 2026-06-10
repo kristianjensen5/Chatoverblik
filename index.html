@@ -199,6 +199,41 @@
     border-radius: 2px;
     font-size: 11px;
   }
+  .server-health.dead .app-path-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .server-health.dead .app-path {
+    flex: 1;
+    overflow-x: auto;
+    white-space: nowrap;
+    font-size: 10px;
+    padding: 3px 6px;
+    user-select: all;
+  }
+  .server-health.dead .app-path-copy {
+    flex-shrink: 0;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    color: #8a0000;
+    background: rgba(0,0,0,0.06);
+    border: 1px solid rgba(138,0,0,0.25);
+    border-radius: 3px;
+    padding: 3px 7px;
+    cursor: pointer;
+  }
+  .server-health.dead .app-path-copy:hover {
+    background: rgba(0,0,0,0.12);
+  }
+  .server-health.dead .app-path-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 10px;
+    opacity: 0.85;
+  }
 
   .sidebar .section-label {
     font-size: 10px;
@@ -1370,7 +1405,29 @@ function setServerHealth(state) {
         Dobbeltklik <code>start.command</code> i Chatoverblik-mappen.
         Når terminal-vinduet åbner, vil denne badge skifte til grøn
         igen automatisk inden for få sekunder.
+        <div class="app-path-row">
+          <code class="app-path">__APP_DIR__</code>
+          <button class="app-path-copy" onclick="copyAppPath(this)">📋 Kopiér sti</button>
+        </div>
+        <span class="app-path-hint">Åbn Finder → tryk ⌘⇧G → indsæt stien for at hoppe direkte til mappen.</span>
       </div>`;
+  }
+}
+
+async function copyAppPath(btn) {
+  const path = btn.parentElement.querySelector(".app-path")?.textContent || "";
+  try {
+    await navigator.clipboard.writeText(path);
+    const orig = btn.textContent;
+    btn.textContent = "✓ Kopieret";
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  } catch (e) {
+    // Fallback: markér teksten så brugeren kan kopiere manuelt
+    const range = document.createRange();
+    range.selectNodeContents(btn.parentElement.querySelector(".app-path"));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 }
 
@@ -1630,7 +1687,7 @@ function renderGrid() {
       const cwd = items[0]?.cwd || "";
       const projActions = cwd ? `
         <span class="proj-header-actions" onclick="event.stopPropagation();">
-          <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Genoptag-guide">📖 Genoptag</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Guide til projektets status og indhold">📖 Projektguide</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="browse-files" data-project="${escapeHTML(proj)}" title="Browse filer i Command Center">📄 Filer</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="mobile-preview" data-project="${escapeHTML(proj)}" title="Mobile preview med QR">📱 Preview</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="open-ws" title="Åbn i VS Code">↗ VS Code</button>
@@ -1900,7 +1957,7 @@ function renderChatDetail(s, messages) {
     </div>
     <div class="modal-title-row">
       <h2 id="modal-title">${escapeHTML(title)}</h2>
-      <button class="rename-btn" id="modal-resume-btn" title="Genoptag i ny chat med AI-genereret brief">🚀 Genoptag</button>
+      <button class="rename-btn" id="modal-resume-btn" title="Start ny chat med AI-genereret brief om denne chat">🚀 Fortsæt i ny chat</button>
       <button class="rename-btn" id="modal-move-btn" title="Flyt til andet projekt">📁 Flyt</button>
       <button class="rename-btn" id="modal-regenerate-btn" title="Lav ny AI-titel + resumé">↻ Ny AI-titel</button>
       <button class="rename-btn" id="modal-rename-btn">✎ Omdøb</button>
@@ -2272,7 +2329,7 @@ function modelPicker(idAttr) {
 async function showResume(session, model = "claude-sonnet-4-6") {
   const closeModalForResume = closeModal;
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Genoptag: ${escapeHTML(session.title || "(uden titel)")}</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Fortsæt i ny chat: ${escapeHTML(session.title || "(uden titel)")}</h2>
     <div class="analysis-loading" id="resume-loading">Genererer brief (15-30s)…</div>
     <div id="resume-result" style="display:none;"></div>`;
   $("modal-bg").classList.add("open");
@@ -2425,7 +2482,7 @@ $("btn-analysis").addEventListener("click", () => showAnalysis(false));
 // ─── Genoptag-guide per projekt ───
 async function showHandover(cwd, projectName, forceNew = false, model = "claude-sonnet-4-6") {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Genoptag-guide: ${escapeHTML(projectName)}</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Projektguide: ${escapeHTML(projectName)}</h2>
     <div class="analysis-loading" id="analysis-loading">${forceNew ? "Genererer guide (20-40 sek)…" : "Indlæser…"}</div>
     <div id="analysis-result" style="display:none;"></div>`;
   openModal();
@@ -2499,16 +2556,27 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
 }
 
 // ─── Nyt projekt ───
-function showNewProject() {
+async function showNewProject() {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Opret nyt projekt</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Nyt projekt</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:18px;">
-      Opretter en ny mappe under Masterversioner med STATUS.md, README.md, .gitignore og en tom index.html.
+      Opretter STATUS.md, README.md, .gitignore og en tom index.html. Filer der allerede findes overskrives ikke.
     </p>
     <div style="display:flex;flex-direction:column;gap:14px;">
-      <label>
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Hvor?</div>
+        <label style="margin-right:18px;cursor:pointer;"><input type="radio" name="np-mode" value="new" checked> Opret ny mappe</label>
+        <label style="cursor:pointer;"><input type="radio" name="np-mode" value="existing"> Brug eksisterende mappe</label>
+      </div>
+      <label id="np-name-wrap">
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Projektnavn</div>
         <input id="np-name" type="text" placeholder="fx Klimakort eller MitNyeSpil" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;" autofocus>
+      </label>
+      <label id="np-existing-wrap" style="display:none;">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Vælg mappe</div>
+        <select id="np-existing" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;background:#fff;">
+          <option value="">Henter mapper…</option>
+        </select>
       </label>
       <div>
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Type</div>
@@ -2534,19 +2602,54 @@ function showNewProject() {
     </div>`;
   openModal();
   $("np-cancel").onclick = closeModal;
+
+  // Mode-toggle: skift mellem navnefelt og dropdown
+  document.querySelectorAll("input[name='np-mode']").forEach(r => {
+    r.onchange = () => {
+      const mode = document.querySelector("input[name='np-mode']:checked").value;
+      $("np-name-wrap").style.display = mode === "new" ? "" : "none";
+      $("np-existing-wrap").style.display = mode === "existing" ? "" : "none";
+    };
+  });
+
+  // Hent mapper i baggrunden så dropdown'en er klar når brugeren vælger den
+  try {
+    const fr = await fetch("/api/all-folders");
+    const fd = await fr.json();
+    const opts = ['<option value="">— vælg —</option>']
+      .concat((fd.folders || []).map(f =>
+        `<option value="${escapeHTML(f.cwd)}">${escapeHTML(f.name)}</option>`));
+    $("np-existing").innerHTML = opts.join("");
+  } catch (e) {
+    $("np-existing").innerHTML = '<option value="">Kunne ikke hente mapper</option>';
+  }
+
   $("np-submit").onclick = async () => {
-    const name = $("np-name").value.trim();
+    const mode = document.querySelector("input[name='np-mode']:checked")?.value || "new";
     const type = document.querySelector("input[name='np-type']:checked")?.value;
-    if (!name) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Skriv et navn først.</span>"; return; }
-    $("np-feedback").textContent = "Opretter…";
+    let payload = { type };
+    let displayName = "";
+    if (mode === "new") {
+      const name = $("np-name").value.trim();
+      if (!name) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Skriv et navn først.</span>"; return; }
+      payload.name = name;
+      displayName = name;
+    } else {
+      const existing = $("np-existing").value;
+      if (!existing) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Vælg en mappe først.</span>"; return; }
+      payload.existing_cwd = existing;
+      displayName = existing.split("/").pop();
+    }
+    $("np-feedback").textContent = mode === "new" ? "Opretter…" : "Sætter op…";
     const r = await fetch("/api/new-project", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, type }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (d.ok) {
-      const firstPrompt = `Hej! Jeg starter et nyt projekt: **${name}** (${type}).
+      const name = d.name || displayName;
+      const firstPrompt = `Hej! Jeg ${d.reused ? "fortsætter arbejde på" : "starter et nyt projekt"}: **${name}** (${type}).
 
 Før vi går i gang vil jeg være sikker på du har fuld kontekst. Gør følgende — og bekræft hvert punkt eksplicit:
 
@@ -2567,10 +2670,13 @@ ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-br
 
 Så ved jeg du har den fulde kontekst og ikke bare har "antaget".`;
 
+      const createdList = (d.created || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
+      const skippedList = (d.skipped || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
       $("np-feedback").innerHTML = `
-        <div style='color:var(--codex);font-weight:700;margin-bottom:10px;'>✅ Oprettet i <code>${escapeHTML(d.path)}</code></div>
+        <div style='color:var(--codex);font-weight:700;margin-bottom:10px;'>✅ ${d.reused ? "Klar i" : "Oprettet i"} <code>${escapeHTML(d.path)}</code></div>
         <div style='font-size:12px;color:var(--muted);margin-bottom:10px;'>
-          Filer oprettet: <code>STATUS.md</code>, <code>README.md</code>, <code>index.html</code>, <code>.gitignore</code>
+          ${createdList ? `Oprettet: ${createdList}` : "Ingen nye filer (alt fandtes allerede)"}
+          ${skippedList ? `<br>Skippet (fandtes allerede): ${skippedList}` : ""}
         </div>
         <div style='background:#fff8e1;border-left:3px solid #d4a017;padding:10px 12px;border-radius:0 4px 4px 0;margin:10px 0;'>
           <div style='font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#8a6500;margin-bottom:6px;'>Foreslået første besked til AI'en</div>
