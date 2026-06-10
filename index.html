@@ -1564,6 +1564,9 @@ function filterAndSort() {
       const inBody = !!state.bodyMatches[`${s.source}:${s.id}`];
       return inMeta || inBody;
     });
+    // Tier-rangering: stærkeste match først, så svagere matches.
+    // Inden for hver tier sorteres efter nyhed (default).
+    for (const s of xs) s._searchTier = searchTier(s, q);
   }
   switch (state.sort) {
     case "oldest":  xs.sort((a,b) => (a.started||"").localeCompare(b.started||"")); break;
@@ -1571,11 +1574,34 @@ function filterAndSort() {
     case "long":    xs.sort((a,b) => (b.msg_count||0) - (a.msg_count||0)); break;
     default:        xs.sort((a,b) => (b.ended||b.started||"").localeCompare(a.ended||a.started||""));
   }
-  // Pin altid øverst (medmindre vi allerede er på Favoritter)
-  if (!state.showOnlyPinned) {
+  // Når der søges: tier først, derefter den valgte sortering (stabil sort)
+  if (state.search) {
+    xs.sort((a, b) => (a._searchTier || 99) - (b._searchTier || 99));
+  }
+  // Pin altid øverst — undtagen ved søgning, hvor tier-relevans bør vinde
+  // (en pinnet meta-chat med kun body-match skal IKKE stå over den rigtige
+  // projekt-chat man leder efter).
+  if (!state.showOnlyPinned && !state.search) {
     xs.sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
   }
   return xs;
+}
+
+// Score en chat mod søge-q. Lavere = stærkere match.
+// 1: projektnavn matcher EKSAKT (du leder efter præcis dette projekt)
+// 2: projektnavn indeholder q (relateret projekt)
+// 3: titel indeholder q (chatten er om emnet)
+// 4: første-besked indeholder q (du startede chatten på emnet)
+// 5: resumé indeholder q (AI'en nævnte det som vigtigt)
+// 6: kun body-match (emnet nævnt i forbifarten)
+function searchTier(s, q) {
+  const p = (s.project || "").toLowerCase();
+  if (p === q) return 1;
+  if (p.includes(q)) return 2;
+  if ((s.title || "").toLowerCase().includes(q)) return 3;
+  if ((s.first_user || "").toLowerCase().includes(q)) return 4;
+  if ((s.summary || "").toLowerCase().includes(q)) return 5;
+  return 6;
 }
 
 function renderGrid() {
@@ -1612,10 +1638,11 @@ function renderGrid() {
     return;
   }
 
-  // Når et filter er aktivt eller der søges/sorteres på "long": flad liste.
+  // Når et filter er aktivt eller der sorteres på "long": flad liste.
+  // Søgning beholder gruppering (per projekt) så bedste matches samles synligt.
   // Ellers: gruppér efter valgt mode (projekt / tid).
   const isFlat = state.selectedCwd || state.showOnlyPinned || state.showOnlyShort
-      || state.activityWindow || state.search || state.sort === "long";
+      || state.activityWindow || state.sort === "long";
   $("fold-toggle").style.display = isFlat ? "none" : "";
 
   if (isFlat) {
@@ -1635,7 +1662,8 @@ function renderGrid() {
       .filter(b => buckets[b.id].length)
       .map(b => {
         const gid = "time:" + b.id;
-        const isOpen = state.openGroups.has(gid);
+        // Når der søges åbnes alle grupper automatisk — ellers er matches skjult bag fold
+        const isOpen = state.search ? true : state.openGroups.has(gid);
         return `
         <details class="project-group" data-gid="${gid}" ${isOpen ? "open" : ""}>
           <summary>${b.label} <span class="count">${buckets[b.id].length} ${buckets[b.id].length === 1 ? "chat" : "chats"}</span></summary>
