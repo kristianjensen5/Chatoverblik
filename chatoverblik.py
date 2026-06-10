@@ -1935,45 +1935,85 @@ En ting der overraskede dig i mønstrene"""
             return
 
         if self.path == "/api/new-project":
-            name = (data.get("name") or "").strip()
             ptype = (data.get("type") or "").strip()
-            if not name or not re.match(r"^[A-Za-zÆØÅæøå0-9 _-]+$", name):
-                self._send_json({"ok": False,
-                    "error": "Ugyldigt navn (kun bogstaver, tal, mellemrum, _ og -)"}, 400)
-                return
             if ptype not in ("arbejde", "privat"):
                 self._send_json({"ok": False, "error": "Type skal være 'arbejde' eller 'privat'"}, 400)
                 return
-            base = MASTERVERSIONER_ROOT / name
-            if base.exists():
-                self._send_json({"ok": False, "error": f"Mappen findes allerede: {base}"}, 400)
-                return
+            # Brug eksisterende mappe (top-niveau under Masterversioner) ELLER opret ny
+            existing_cwd = (data.get("existing_cwd") or "").strip()
+            if existing_cwd:
+                try:
+                    target = Path(existing_cwd).resolve()
+                except Exception:
+                    self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
+                    return
+                root_str = str(MASTERVERSIONER_ROOT.resolve())
+                if not (str(target).startswith(root_str + "/") and target.is_dir()):
+                    self._send_json({"ok": False,
+                        "error": "Mappen er ikke under Masterversioner"}, 403)
+                    return
+                base = target
+                name = target.name
+            else:
+                name = (data.get("name") or "").strip()
+                if not name or not re.match(r"^[A-Za-zÆØÅæøå0-9 _-]+$", name):
+                    self._send_json({"ok": False,
+                        "error": "Ugyldigt navn (kun bogstaver, tal, mellemrum, _ og -)"}, 400)
+                    return
+                base = MASTERVERSIONER_ROOT / name
+                if base.exists():
+                    self._send_json({"ok": False, "error": f"Mappen findes allerede: {base}"}, 400)
+                    return
+            created = []
+            skipped = []
             try:
-                base.mkdir(parents=True)
-                # STATUS.md fra skabelon i context/
-                template = (MASTERVERSIONER_ROOT
-                           / "context" / "06_status_template.md")
-                status_text = template.read_text(encoding="utf-8") if template.exists() else ""
-                status_text = (status_text
-                              .replace("<PROJEKTNAVN>", name)
-                              .replace("arbejde | privat", ptype)
-                              .replace("ÅÅÅÅ-MM-DD", time.strftime("%Y-%m-%d")))
-                (base / "STATUS.md").write_text(status_text, encoding="utf-8")
+                if not existing_cwd:
+                    base.mkdir(parents=True)
+                # STATUS.md — kun hvis den ikke findes (beskyt eksisterende arbejde)
+                status_path = base / "STATUS.md"
+                if status_path.exists():
+                    skipped.append("STATUS.md")
+                else:
+                    template = (MASTERVERSIONER_ROOT
+                               / "context" / "06_status_template.md")
+                    status_text = template.read_text(encoding="utf-8") if template.exists() else ""
+                    status_text = (status_text
+                                  .replace("<PROJEKTNAVN>", name)
+                                  .replace("arbejde | privat", ptype)
+                                  .replace("ÅÅÅÅ-MM-DD", time.strftime("%Y-%m-%d")))
+                    status_path.write_text(status_text, encoding="utf-8")
+                    created.append("STATUS.md")
                 # README.md
-                (base / "README.md").write_text(
-                    f"# {name}\n\nKort beskrivelse her.\n\nSe STATUS.md for igangværende status.\n",
-                    encoding="utf-8")
+                readme_path = base / "README.md"
+                if readme_path.exists():
+                    skipped.append("README.md")
+                else:
+                    readme_path.write_text(
+                        f"# {name}\n\nKort beskrivelse her.\n\nSe STATUS.md for igangværende status.\n",
+                        encoding="utf-8")
+                    created.append("README.md")
                 # .gitignore
-                (base / ".gitignore").write_text(
-                    ".DS_Store\nnode_modules/\n*.log\n.wrangler/\n",
-                    encoding="utf-8")
-                # Tom index.html som start
-                (base / "index.html").write_text(
-                    f"<!DOCTYPE html>\n<html lang=\"da\">\n<head>\n  <meta charset=\"utf-8\">\n"
-                    f"  <title>{name}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                    f"</head>\n<body>\n  <h1>{name}</h1>\n</body>\n</html>\n",
-                    encoding="utf-8")
-                self._send_json({"ok": True, "path": str(base)})
+                gitignore_path = base / ".gitignore"
+                if gitignore_path.exists():
+                    skipped.append(".gitignore")
+                else:
+                    gitignore_path.write_text(
+                        ".DS_Store\nnode_modules/\n*.log\n.wrangler/\n",
+                        encoding="utf-8")
+                    created.append(".gitignore")
+                # index.html — opret kun hvis mappen ikke har en *.html i forvejen
+                if any(base.glob("*.html")):
+                    skipped.append("index.html (anden .html findes allerede)")
+                else:
+                    (base / "index.html").write_text(
+                        f"<!DOCTYPE html>\n<html lang=\"da\">\n<head>\n  <meta charset=\"utf-8\">\n"
+                        f"  <title>{name}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+                        f"</head>\n<body>\n  <h1>{name}</h1>\n</body>\n</html>\n",
+                        encoding="utf-8")
+                    created.append("index.html")
+                self._send_json({"ok": True, "path": str(base), "name": name,
+                                "created": created, "skipped": skipped,
+                                "reused": bool(existing_cwd)})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return

@@ -2556,16 +2556,27 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
 }
 
 // ─── Nyt projekt ───
-function showNewProject() {
+async function showNewProject() {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Opret nyt projekt</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Nyt projekt</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:18px;">
-      Opretter en ny mappe under Masterversioner med STATUS.md, README.md, .gitignore og en tom index.html.
+      Opretter STATUS.md, README.md, .gitignore og en tom index.html. Filer der allerede findes overskrives ikke.
     </p>
     <div style="display:flex;flex-direction:column;gap:14px;">
-      <label>
+      <div>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Hvor?</div>
+        <label style="margin-right:18px;cursor:pointer;"><input type="radio" name="np-mode" value="new" checked> Opret ny mappe</label>
+        <label style="cursor:pointer;"><input type="radio" name="np-mode" value="existing"> Brug eksisterende mappe</label>
+      </div>
+      <label id="np-name-wrap">
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Projektnavn</div>
         <input id="np-name" type="text" placeholder="fx Klimakort eller MitNyeSpil" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;" autofocus>
+      </label>
+      <label id="np-existing-wrap" style="display:none;">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Vælg mappe</div>
+        <select id="np-existing" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;background:#fff;">
+          <option value="">Henter mapper…</option>
+        </select>
       </label>
       <div>
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Type</div>
