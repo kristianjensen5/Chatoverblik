@@ -2602,19 +2602,54 @@ async function showNewProject() {
     </div>`;
   openModal();
   $("np-cancel").onclick = closeModal;
+
+  // Mode-toggle: skift mellem navnefelt og dropdown
+  document.querySelectorAll("input[name='np-mode']").forEach(r => {
+    r.onchange = () => {
+      const mode = document.querySelector("input[name='np-mode']:checked").value;
+      $("np-name-wrap").style.display = mode === "new" ? "" : "none";
+      $("np-existing-wrap").style.display = mode === "existing" ? "" : "none";
+    };
+  });
+
+  // Hent mapper i baggrunden så dropdown'en er klar når brugeren vælger den
+  try {
+    const fr = await fetch("/api/all-folders");
+    const fd = await fr.json();
+    const opts = ['<option value="">— vælg —</option>']
+      .concat((fd.folders || []).map(f =>
+        `<option value="${escapeHTML(f.cwd)}">${escapeHTML(f.name)}</option>`));
+    $("np-existing").innerHTML = opts.join("");
+  } catch (e) {
+    $("np-existing").innerHTML = '<option value="">Kunne ikke hente mapper</option>';
+  }
+
   $("np-submit").onclick = async () => {
-    const name = $("np-name").value.trim();
+    const mode = document.querySelector("input[name='np-mode']:checked")?.value || "new";
     const type = document.querySelector("input[name='np-type']:checked")?.value;
-    if (!name) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Skriv et navn først.</span>"; return; }
-    $("np-feedback").textContent = "Opretter…";
+    let payload = { type };
+    let displayName = "";
+    if (mode === "new") {
+      const name = $("np-name").value.trim();
+      if (!name) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Skriv et navn først.</span>"; return; }
+      payload.name = name;
+      displayName = name;
+    } else {
+      const existing = $("np-existing").value;
+      if (!existing) { $("np-feedback").innerHTML = "<span style='color:var(--accent);'>Vælg en mappe først.</span>"; return; }
+      payload.existing_cwd = existing;
+      displayName = existing.split("/").pop();
+    }
+    $("np-feedback").textContent = mode === "new" ? "Opretter…" : "Sætter op…";
     const r = await fetch("/api/new-project", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, type }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (d.ok) {
-      const firstPrompt = `Hej! Jeg starter et nyt projekt: **${name}** (${type}).
+      const name = d.name || displayName;
+      const firstPrompt = `Hej! Jeg ${d.reused ? "fortsætter arbejde på" : "starter et nyt projekt"}: **${name}** (${type}).
 
 Før vi går i gang vil jeg være sikker på du har fuld kontekst. Gør følgende — og bekræft hvert punkt eksplicit:
 
@@ -2635,10 +2670,13 @@ ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-br
 
 Så ved jeg du har den fulde kontekst og ikke bare har "antaget".`;
 
+      const createdList = (d.created || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
+      const skippedList = (d.skipped || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
       $("np-feedback").innerHTML = `
-        <div style='color:var(--codex);font-weight:700;margin-bottom:10px;'>✅ Oprettet i <code>${escapeHTML(d.path)}</code></div>
+        <div style='color:var(--codex);font-weight:700;margin-bottom:10px;'>✅ ${d.reused ? "Klar i" : "Oprettet i"} <code>${escapeHTML(d.path)}</code></div>
         <div style='font-size:12px;color:var(--muted);margin-bottom:10px;'>
-          Filer oprettet: <code>STATUS.md</code>, <code>README.md</code>, <code>index.html</code>, <code>.gitignore</code>
+          ${createdList ? `Oprettet: ${createdList}` : "Ingen nye filer (alt fandtes allerede)"}
+          ${skippedList ? `<br>Skippet (fandtes allerede): ${skippedList}` : ""}
         </div>
         <div style='background:#fff8e1;border-left:3px solid #d4a017;padding:10px 12px;border-radius:0 4px 4px 0;margin:10px 0;'>
           <div style='font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:#8a6500;margin-bottom:6px;'>Foreslået første besked til AI'en</div>
