@@ -1630,7 +1630,7 @@ function renderGrid() {
       const cwd = items[0]?.cwd || "";
       const projActions = cwd ? `
         <span class="proj-header-actions" onclick="event.stopPropagation();">
-          <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Genoptag-guide">📖 Genoptag</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Guide til projektets status og indhold">📖 Projektguide</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="browse-files" data-project="${escapeHTML(proj)}" title="Browse filer i Command Center">📄 Filer</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="mobile-preview" data-project="${escapeHTML(proj)}" title="Mobile preview med QR">📱 Preview</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="open-ws" title="Åbn i VS Code">↗ VS Code</button>
@@ -1900,7 +1900,7 @@ function renderChatDetail(s, messages) {
     </div>
     <div class="modal-title-row">
       <h2 id="modal-title">${escapeHTML(title)}</h2>
-      <button class="rename-btn" id="modal-resume-btn" title="Genoptag i ny chat med AI-genereret brief">🚀 Genoptag</button>
+      <button class="rename-btn" id="modal-resume-btn" title="Start ny chat med AI-genereret brief om denne chat">🚀 Fortsæt i ny chat</button>
       <button class="rename-btn" id="modal-move-btn" title="Flyt til andet projekt">📁 Flyt</button>
       <button class="rename-btn" id="modal-regenerate-btn" title="Lav ny AI-titel + resumé">↻ Ny AI-titel</button>
       <button class="rename-btn" id="modal-rename-btn">✎ Omdøb</button>
@@ -2272,7 +2272,7 @@ function modelPicker(idAttr) {
 async function showResume(session, model = "claude-sonnet-4-6") {
   const closeModalForResume = closeModal;
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Genoptag: ${escapeHTML(session.title || "(uden titel)")}</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Fortsæt i ny chat: ${escapeHTML(session.title || "(uden titel)")}</h2>
     <div class="analysis-loading" id="resume-loading">Genererer brief (15-30s)…</div>
     <div id="resume-result" style="display:none;"></div>`;
   $("modal-bg").classList.add("open");
@@ -2425,7 +2425,7 @@ $("btn-analysis").addEventListener("click", () => showAnalysis(false));
 // ─── Genoptag-guide per projekt ───
 async function showHandover(cwd, projectName, forceNew = false, model = "claude-sonnet-4-6") {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Genoptag-guide: ${escapeHTML(projectName)}</h2>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📖 Projektguide: ${escapeHTML(projectName)}</h2>
     <div class="analysis-loading" id="analysis-loading">${forceNew ? "Genererer guide (20-40 sek)…" : "Indlæser…"}</div>
     <div id="analysis-result" style="display:none;"></div>`;
   openModal();
