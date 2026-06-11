@@ -1207,6 +1207,7 @@
       <button id="btn-widgets" class="sidebar-tool-btn">📚 Komponent-bibliotek</button>
       <button id="btn-weekly-retro" class="sidebar-tool-btn">📅 Ugens retro</button>
       <button id="btn-analysis" class="sidebar-tool-btn">📊 Analyse af mit workflow</button>
+      <button id="btn-prompting-review" class="sidebar-tool-btn">🎯 Stil-audit (sidste 3 uger)</button>
     </div>
 
     <ul class="proj-list" id="proj-favorites">
@@ -2585,6 +2586,50 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
   }
 }
 
+// ─── Stil-audit: review af åbnings-formuleringer på chat-niveau ───
+// Adskiller sig fra workflow-analyse ved at se på HVORDAN Kristian skriver
+// sine prompts, ikke HVAD chats handler om. Sender de faktiske first_user-
+// beskeder så modellen kan citere konkrete formuleringer.
+async function showPromptingReview(model = "claude-fable-5", days = 21) {
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🎯 Stil-audit af mine åbnings-formuleringer</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">
+      AI'en læser dine åbnings-beskeder fra sidste ${days} dage og leder efter mønstre i HVORDAN du skriver — ikke hvad chats handler om.
+    </p>
+    <div class="analysis-loading" id="analysis-loading">Henter chats og analyserer (30-90 sek)…</div>
+    <div id="analysis-result" style="display:none;"></div>`;
+  openModal();
+
+  try {
+    const r = await fetch("/api/prompting-review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, days }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
+      return;
+    }
+    $("analysis-loading").style.display = "none";
+    $("analysis-result").style.display = "block";
+    const modelTag = d.model ? ` · ${MODEL_LABELS[d.model] || d.model}` : "";
+    $("analysis-result").innerHTML = `
+      <div class="analysis-meta">
+        <span>${d.chat_count} chats · sidste ${d.days} dage · ${d.generated_at}${modelTag}</span>
+        <span style="display:flex;gap:8px;align-items:center;">
+          ${modelPicker("regen-prompting-model")}
+          <button id="regen-prompting">↻ Kør igen</button>
+        </span>
+      </div>
+      <div class="analysis-content">${renderMarkdown(d.markdown)}</div>`;
+    if (d.model) $("regen-prompting-model").value = d.model;
+    $("regen-prompting").onclick = () => showPromptingReview($("regen-prompting-model").value, days);
+  } catch (e) {
+    $("analysis-loading").textContent = "Fejl: " + e.message;
+  }
+}
+
 // ─── Nyt projekt ───
 async function showNewProject() {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
@@ -2741,6 +2786,7 @@ Så ved jeg du har den fulde kontekst og ikke bare har "antaget".`;
 $("btn-weekly-retro").addEventListener("click", () => showWeeklyRetro());
 $("btn-new-project").addEventListener("click", () => showNewProject());
 $("btn-widgets").addEventListener("click", () => showWidgets());
+$("btn-prompting-review").addEventListener("click", () => showPromptingReview());
 
 // ─── File browser & code viewer ───
 async function showFileBrowser(cwd, projectName) {
