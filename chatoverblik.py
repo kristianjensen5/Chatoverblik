@@ -1966,13 +1966,30 @@ En ting der overraskede dig i mønstrene"""
                 return
 
             recent.sort(key=lambda s: s.get("started") or "", reverse=True)
-            # Saml chats med længere first_user-uddrag (~1200 tegn) så modellen
-            # kan se den faktiske formulering, ikke bare en titel
+            # Saml chats med både first_user (~1200 tegn) OG last_user (~600 tegn).
+            # Sidstnævnte er nødvendig for deliverable #2 (lukning ↔ næste åbning):
+            # modellen parrer en chats sidste besked med den næste chats første
+            # besked i samme projekt for at se om Kristian lukker eller ebber ud.
             chat_data = []
             for s in recent:
                 fu = (s.get("first_user", "") or "").strip()
                 if not fu:
                     continue
+                # Træk last_user ud af chat-jsonl'en. render_chat_for_view returnerer
+                # alle user/assistant-beskeder i kronologisk rækkefølge.
+                last_user = ""
+                try:
+                    msgs = render_chat_for_view(s)
+                    for m in reversed(msgs):
+                        if m.get("role") == "user" and m.get("text", "").strip():
+                            last_user = m["text"].strip()[:600]
+                            break
+                except Exception:
+                    pass
+                # Hvis kun én user-besked: last_user == first_user. Drop for
+                # at undgå at modellen tror det er to forskellige beskeder.
+                if last_user[:200] == fu[:200]:
+                    last_user = ""
                 chat_data.append({
                     "projekt": s.get("project", ""),
                     "titel": (s.get("title", "") or "")[:120],
@@ -1980,6 +1997,7 @@ En ting der overraskede dig i mønstrene"""
                     "antal_beskeder": s.get("msg_count", 0),
                     "dato": (s.get("started", "") or "")[:10],
                     "min_aabningsbesked": fu[:1200],
+                    "min_sidste_besked": last_user,
                     "resumé": (s.get("summary", "") or "")[:200],
                 })
             if not chat_data:
@@ -1988,13 +2006,15 @@ En ting der overraskede dig i mønstrene"""
                 return
 
             prompt = f"""Du er en reviewer der ser på HVORDAN Kristian \
-formulerer sine åbnings-beskeder til AI'er — ikke HVAD chats handler om. \
-Han er digital journalist på Politiken, vibe-coder, og leder efter \
-mønstre i sine egne formuleringer.
+formulerer sine åbnings- OG lukke-beskeder til AI'er — ikke HVAD chats \
+handler om. Han er digital journalist på Politiken, vibe-coder, og leder \
+efter mønstre i sine egne formuleringer.
 
-Du har her hans {len(chat_data)} faktiske åbnings-beskeder fra sidste \
-{days} dage. For hver chat ser du første-besked (det HAN skrev), titlen, \
-projektet, antal beskeder den blev til, og et kort resumé.
+Du har her hans {len(chat_data)} chats fra sidste {days} dage. For hver \
+chat ser du første-besked (det HAN skrev som åbning), sidste-besked (det \
+HAN skrev før chatten lukkede), titlen, projektet, antal beskeder, dato \
+og et kort resumé. Når en chat kun havde én user-besked er min_sidste_besked \
+tom.
 
 DATA:
 {json.dumps(chat_data, indent=2, ensure_ascii=False)}
@@ -2002,26 +2022,30 @@ DATA:
 Lever en skarp analyse i markdown:
 
 ## 1. Mønstre i åbnings-formuleringerne
-3-5 konkrete mønstre du ser i HVORDAN han skriver. Citér faktiske \
-formuleringer (kort — 5-15 ord ad gangen). Skel mellem hvad der \
-gentager sig fordi det virker, og hvad der gentager sig som dårlig vane.
+3-5 mønstre, citerede, skel mellem "virker" og "dårlig vane" — med konkret \
+alternativ-formulering for hver dårlig vane. Notér særskilt: genbruger han \
+sine egne skabelon-prompts, eller skriver han fra bunden hver gang?
 
-## 2. Hvad korrelerer med succes vs. lange sessioner?
-Sammenlign åbninger der førte til korte/effektive chats (lavt \
-antal_beskeder + kort resumé der lyder afsluttet) med åbninger der \
-førte til lange chats (højt antal_beskeder). Hvad kendetegner de gode \
-åbninger? Vær KONKRET — citér.
+## 2. Lukning og genåbning
+Par sidste besked i en chat med første besked i projektets NÆSTE chat \
+(sortér chats per projekt efter dato): sluttede chatten med en lukke-handling \
+(deploy, STATUS.md, verificering), og samlede næste åbning det op — eller \
+ebbede den ud, hvorefter næste chat startede med noget nyt? Citér de \
+tydeligste par.
 
-## 3. Tre formulerings-fælder
-De tre formuleringsvaner der oftest koster ham tid. For hver:
-- Hvad han skriver (citat)
-- Hvorfor det er en fælde
-- Hvad han kunne skrive i stedet — KONKRET, ikke 'vær mere klar'
+## 3. Definition of done
+Hvor mange åbninger siger hvornår opgaven er færdig, eller hvilket bevis \
+der kræves ("vi er færdige når...", "testet på mobil", "deployet")? Citér \
+de bedste og de mest åbne. Tjek mod gentagelses-signalet: genåbnes chats \
+med slutkriterium sjældnere end chats uden?
 
-## 4. Én ting at ændre i morgen
-Den enkleste konkrete ændring i åbnings-formuleringen der vil gøre \
-mest forskel. Skriv den som en sætning Kristian kan kopiere ind i sin \
-næste åbnings-besked.
+## 4. Constraints før features
+Nævner åbningen de bindende rammer (mobil/desktop, CMS-embed, scope-låst, \
+læserdata/sikkerhed), eller er den ren feature-bestilling? Citér eksempler \
+på begge.
+
+## 5. Én ting at ændre i morgen
+Én sætning til kopi-paste i næste åbnings-besked.
 
 Begrænsninger:
 - Ingen kompliment-runde
