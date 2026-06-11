@@ -1935,6 +1935,112 @@ En ting der overraskede dig i mønstrene"""
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
 
+        if self.path == "/api/prompting-review":
+            # Fokuseret review af FORMULERINGER — sender Kristians faktiske
+            # åbnings-beskeder (first_user) på tværs af de seneste 21 dage til
+            # AI'en. Adskiller sig fra workflow-analyse ved at se på HVORDAN
+            # Kristian skriver, ikke HVAD chats handler om.
+            from datetime import datetime, timezone, timedelta
+            days = int(data.get("days") or 21)
+            cutoff_dt = datetime.now(timezone.utc) - timedelta(days=days)
+
+            def _parse_ts(s):
+                if not s:
+                    return None
+                try:
+                    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+
+            recent = []
+            for s in STATE["sessions"]:
+                ts = _parse_ts(s.get("ended") or s.get("started"))
+                if ts and ts >= cutoff_dt:
+                    recent.append(s)
+            if not recent:
+                self._send_json({"ok": False,
+                    "error": f"Ingen chats sidste {days} dage"}, 400)
+                return
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
+                return
+
+            recent.sort(key=lambda s: s.get("started") or "", reverse=True)
+            # Saml chats med længere first_user-uddrag (~1200 tegn) så modellen
+            # kan se den faktiske formulering, ikke bare en titel
+            chat_data = []
+            for s in recent:
+                fu = (s.get("first_user", "") or "").strip()
+                if not fu:
+                    continue
+                chat_data.append({
+                    "projekt": s.get("project", ""),
+                    "titel": (s.get("title", "") or "")[:120],
+                    "kilde": s.get("source", ""),
+                    "antal_beskeder": s.get("msg_count", 0),
+                    "dato": (s.get("started", "") or "")[:10],
+                    "min_aabningsbesked": fu[:1200],
+                    "resumé": (s.get("summary", "") or "")[:200],
+                })
+            if not chat_data:
+                self._send_json({"ok": False,
+                    "error": "Ingen chats med åbningsbesked fundet"}, 400)
+                return
+
+            prompt = f"""Du er en reviewer der ser på HVORDAN Kristian \
+formulerer sine åbnings-beskeder til AI'er — ikke HVAD chats handler om. \
+Han er digital journalist på Politiken, vibe-coder, og leder efter \
+mønstre i sine egne formuleringer.
+
+Du har her hans {len(chat_data)} faktiske åbnings-beskeder fra sidste \
+{days} dage. For hver chat ser du første-besked (det HAN skrev), titlen, \
+projektet, antal beskeder den blev til, og et kort resumé.
+
+DATA:
+{json.dumps(chat_data, indent=2, ensure_ascii=False)}
+
+Lever en skarp analyse i markdown:
+
+## 1. Mønstre i åbnings-formuleringerne
+3-5 konkrete mønstre du ser i HVORDAN han skriver. Citér faktiske \
+formuleringer (kort — 5-15 ord ad gangen). Skel mellem hvad der \
+gentager sig fordi det virker, og hvad der gentager sig som dårlig vane.
+
+## 2. Hvad korrelerer med succes vs. lange sessioner?
+Sammenlign åbninger der førte til korte/effektive chats (lavt \
+antal_beskeder + kort resumé der lyder afsluttet) med åbninger der \
+førte til lange chats (højt antal_beskeder). Hvad kendetegner de gode \
+åbninger? Vær KONKRET — citér.
+
+## 3. Tre formulerings-fælder
+De tre formuleringsvaner der oftest koster ham tid. For hver:
+- Hvad han skriver (citat)
+- Hvorfor det er en fælde
+- Hvad han kunne skrive i stedet — KONKRET, ikke 'vær mere klar'
+
+## 4. Én ting at ændre i morgen
+Den enkleste konkrete ændring i åbnings-formuleringen der vil gøre \
+mest forskel. Skriv den som en sætning Kristian kan kopiere ind i sin \
+næste åbnings-besked.
+
+Begrænsninger:
+- Ingen kompliment-runde
+- Citér faktiske formuleringer som bevis — ingen påstande uden citat
+- Hvis du ikke har nok data til et punkt: sig det
+"""
+
+            model_choice = pick_model(data.get("model"))
+            try:
+                text = call_anthropic(prompt, model=model_choice,
+                                      max_tokens=3000, timeout=120)
+                ts = time.strftime("%Y-%m-%d %H:%M")
+                self._send_json({"ok": True, "markdown": text,
+                                "generated_at": ts, "model": model_choice,
+                                "chat_count": len(chat_data), "days": days})
+            except Exception as e:
+                self._send_json({"ok": False, "error": str(e)}, 500)
+            return
+
         if self.path == "/api/new-project":
             ptype = (data.get("type") or "").strip()
             if ptype not in ("arbejde", "privat"):
