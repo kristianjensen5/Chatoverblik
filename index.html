@@ -2341,6 +2341,7 @@ function renderMarkdown(md) {
 const MODEL_LABELS = {
   "claude-sonnet-4-6": "Sonnet 4.6 (~$0.50)",
   "claude-opus-4-8": "Opus 4.8 (~$2.50)",
+  "claude-fable-5": "Fable 5",
 };
 
 function modelPicker(idAttr) {
@@ -2348,6 +2349,7 @@ function modelPicker(idAttr) {
     <select id="${idAttr}" style="font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;">
       <option value="claude-sonnet-4-6">Sonnet 4.6 (hurtigere, ~$0.50)</option>
       <option value="claude-opus-4-8">Opus 4.8 (dybere, ~$2.50)</option>
+      <option value="claude-fable-5">Fable 5 (nyeste)</option>
     </select>`;
 }
 
