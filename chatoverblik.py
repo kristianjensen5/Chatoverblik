@@ -83,8 +83,17 @@ def call_anthropic(prompt, *, model=DEFAULT_MODEL, max_tokens=1000, timeout=60):
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return "".join(b.get("text", "") for b in data.get("content", [])
+    text = "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text")
+    # Diagnostik: hvis text er tom, log struktur til terminal så vi kan se
+    # hvorfor (typisk: extended-thinking-modeller bruger alle tokens på
+    # 'thinking'-blokke når max_tokens er for lavt).
+    if not text.strip():
+        types = [b.get("type") for b in data.get("content", [])]
+        print(f"[call_anthropic] Tom text fra {model}. "
+              f"Block-typer: {types}. stop_reason: {data.get('stop_reason')}. "
+              f"usage: {data.get('usage')}", flush=True)
+    return text
 
 
 # ───────── Cache for AI-titler ─────────
@@ -2055,8 +2064,20 @@ Begrænsninger:
 
             model_choice = pick_model(data.get("model"))
             try:
+                # Højt max_tokens-loft fordi Fable 5 bruger extended thinking
+                # som default — hvis budgettet er for lavt æder tankerækker
+                # alle tokens og text-blokken returnerer tom. 16000 giver
+                # plads til både thinking og det fulde markdown-output.
                 text = call_anthropic(prompt, model=model_choice,
-                                      max_tokens=3000, timeout=120)
+                                      max_tokens=16000, timeout=180)
+                if not text.strip():
+                    self._send_json({"ok": False,
+                        "error": (f"{model_choice} returnerede tom text. "
+                                 "Sandsynligvis extended-thinking der har \xc3\xa6dt "
+                                 "alle tokens. Tjek terminalen for stop_reason. "
+                                 "Pr\xc3\xb8v evt. Sonnet 4.6 indtil videre.")},
+                        500)
+                    return
                 ts = time.strftime("%Y-%m-%d %H:%M")
                 self._send_json({"ok": True, "markdown": text,
                                 "generated_at": ts, "model": model_choice,
