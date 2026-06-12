@@ -143,7 +143,9 @@ dukker først op når serveren genstartes.
    med rækkefølgen `code -n <workspace>` → aktivér VS Code →
    `vscode://anthropic.claude-code/open`. Kristian verificerede, at
    Pauseklovnen-workspace åbner med synlig Claude Code-fane uden manuelle
-   klik.
+   klik. Follow-up verificerede samme eksplicitte URI-flow for Codex med
+   `vscode://openai.chatgpt/`: Pauseklovnen-workspace åbner med synligt
+   Codex-panel.
 4. **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
 
 ---

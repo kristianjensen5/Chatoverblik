@@ -46,6 +46,7 @@ MAX_PARALLEL_AI_CALLS = 8
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 RESCAN_INTERVAL_SECONDS = 25
 CLAUDE_CODE_URI = "vscode://anthropic.claude-code/open"
+CODEX_URI = "vscode://openai.chatgpt/"
 
 # Alle modeller frontend må vælge. Tidligere copy-pasted i 3+ endpoints med
 # forskellige allowlists — workflow-analysis udelukkede tilfældigt haiku.
@@ -1781,14 +1782,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     logged_popen(["open", "-a", "Visual Studio Code", workspace_root],
                                  stdout=subprocess.DEVNULL)
 
-                if mode == "new-chat" and source == "claude":
+                extension_uri = None
+                if mode == "new-chat":
+                    if source == "claude":
+                        extension_uri = CLAUDE_CODE_URI
+                    elif source == "codex":
+                        extension_uri = CODEX_URI
+
+                if extension_uri:
                     time.sleep(0.8)
 
                 logged_popen(["osascript", "-e",
                               'tell application "Visual Studio Code" to activate'])
-                if mode == "new-chat" and source == "claude":
+                if extension_uri:
                     time.sleep(0.2)
-                    logged_popen(["open", CLAUDE_CODE_URI])
+                    logged_popen(["open", extension_uri])
 
                 self._send_json({"ok": True, "opened": workspace_root,
                                 "workspace_file": ws_file,
