@@ -42,8 +42,8 @@ genoptag-guide, ugens retro, og nyt-projekt-flow.
   - ✅ Per-projekt `.code-workspace`-fil genereres i `Chatoverblik/.workspaces/` (skjult)
   - ✅ Hver workspace har sin egen Peacock-farve inline (Hulemanden=orange, GriseCounter=grøn, MacGameBridge=lilla, osv.)
   - ✅ `code -n <ws-file>` — hver fil er unik workspace-identity → nyt VS Code-vindue per projekt
-  - ✅ `workbench.action.closeAllEditors` kæde'd ind så Welcome-fanen ikke vises
-  - ⚠️ Auto-ny-chat ved opstart: **Codex** virker via `chatgpt.newChat`. **Claude** har INGEN eksponeret "New Conversation"-kommando — vi åbner kun sidebaren og bruger klikker "+" selv
+  - ✅ Døde `--command`-args fjernet; VS Code åbnes direkte med `code -n <ws-file>`
+  - ✅ Chat-extension åbnes eksplicit efter workspace-aktivering: **Claude** via URI-handler og **Codex** via URI-handler
   - ⚠️ Begge AI-extensions loader som tabs i secondary sidebar uden vi kan "switche" — det er Kristians sidebar-bredde der afgør om begge er synlige eller skjult bag "..."-menu
   - Workspace Trust skal accepteres første gang per workspace for farve at vises
 
@@ -146,7 +146,7 @@ dukker først op når serveren genstartes.
    klik. Follow-up verificerede samme eksplicitte URI-flow for Codex med
    `vscode://openai.chatgpt/`: Pauseklovnen-workspace åbner med synligt
    Codex-panel.
-4. **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
+4. ✅ **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
 
 ---
 
