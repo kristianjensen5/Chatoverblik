@@ -148,6 +148,24 @@ dukker først op når serveren genstartes.
    Codex-panel.
 4. ✅ **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
 
+### Kristians end-to-end-sluttest 2026-06-13 (regel 14-kvittering)
+
+1. ✅ **Rescan:** nyt projekt dukkede op i Command Center kort efter — uden
+   server-genstart.
+2. ✅ **Claude-åbning:** rette workspace + rette chat åben, ingen manuelle klik.
+3. ⚠️ **Codex-åbning — delvist:** rette workspace + synligt Codex-panel, men
+   den KONKRETE chat åbnes ikke — panelet viser Sessions-listen, hvor chatten
+   ligger øverst (ét klik fra mål).
+
+**Accepteret begrænsning (Fable-undersøgt 2026-06-13):** Codex-extensionens
+URI-handler sender blot URI-stien videre som rute til panelets webview
+(`handleUri` → `navigateToRoute`). Ruterne er udokumenterede, ligger i
+minificerede bundles og ændrer sig ved extension-opdateringer — ingen
+"genoptag chat"-rute fundet i hverken `out/extension.js` eller
+webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
+ét klik. Valgfri rest-opgave (lav prioritet): toast i CC ved Codex-genoptag —
+"Codex-panelet er åbnet — din chat ligger øverst i Sessions-listen".
+
 ---
 
 ## Næste skridt
