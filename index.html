@@ -2736,6 +2736,7 @@ List de 3-5 mest relevante memory-entries du har om mig fra Masterversioner-kont
 - \`Masterversioner/context/00_index.md\` — orientering
 - \`Masterversioner/context/01_arbejdsgang.md\` — workflow-regler
 - \`Masterversioner/context/05_lessons.md\` — globale lærte lektier
+- \`Masterversioner/context/07_model_playbook.md\` — hvornår Fable bruges til plan/audit, og hvornår billigere modeller bygger
 ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-brand (CSS, typografi, CMS)\n- `Masterversioner/context/03_security.md` — sikkerheds-baseline\n" : ""}- \`Masterversioner/context/04_widgets.md\` — eksisterende komponenter (måske er der en relevant skabelon)
 - \`Masterversioner/${name}/STATUS.md\` — den tomme status-fil jeg lige har oprettet
 
@@ -2743,7 +2744,9 @@ ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-br
 - Én sætning om hvad projektet handler om (din forståelse — gerne hvis du genkender en pattern fra mine andre projekter)
 - Tre konkrete spørgsmål du har brug for svar på, for at vi kan komme i gang
 
-Så ved jeg du har den fulde kontekst og ikke bare har "antaget".`;
+Så ved jeg du har den fulde kontekst og ikke bare har "antaget".
+
+Denne chat er færdig når: [ét verificerbart bevis, fx 'testet på mobil og deployet']. Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævner præcis hvad der mangler — især åbne bugs.`;
 
       const createdList = (d.created || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
       const skippedList = (d.skipped || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
