@@ -2,8 +2,8 @@
 
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
-**GitHub:** (ikke pushed endnu)
-**Senest opdateret:** 2026-06-10
+**GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
+**Senest opdateret:** 2026-06-12 (Fable-audit: stabilitet som primær indgang)
 
 ---
 
@@ -74,6 +74,61 @@ Multi-agent kode-review (`ULTRA_REVIEW.md`) fandt 15 fund — alle nu lukket ell
 - ❌ Curated terminal-knapper (deploy, git status osv.) — overvejes som næste step
 - ❌ Migration af min Chatoverblik-kode til politiken-widget Cloudflare-konto (afventer redaktør-svar)
 - ❌ **Udskudt fra ultra-review:** cwd-felt-konsolidering (`cwd`/`original_cwd`/`cwd_hint`/`user_cwd` → ét felt + source-tag), split preview-listener på separat port, inline-styles → CSS-klasser. Ingen distribution-blockers.
+
+---
+
+## Fable-audit 2026-06-12: stabilitet som primær indgang
+
+Mål: Command Center skal være den stabile, primære indgang til at kode i
+VS Code. Auditten fandt to rod-årsager til Kristians ustabilitets-oplevelse
+— begge verificeret med kommando-output, ikke antagelser.
+
+### Fund A — "Åbn i VS Code" åbner aldrig chat-extensionen
+
+`do_POST /api/open-in-windsurf` (chatoverblik.py ~linje 1598-1624) sender
+`--command claude-vscode.sidebar.open` m.fl. til `code`-CLI'en. **VS Code
+CLI 1.124 har intet `--command`-flag** (verificeret med `code --help`
+2026-06-12) — flagene ignoreres, og fejlen er usynlig fordi stderr sendes
+til DEVNULL. Linje 45-46 i denne fil påstod at kæden virkede ("Codex virker
+via chatgpt.newChat") — det blev aldrig verificeret end-to-end og er forkert.
+
+### Fund B — Nye chats vises først efter server-genstart
+
+`background_load()` (linje 1160) kører ÉN gang i en tråd ved serverstart.
+Frontend poller `/api/sessions` hvert 4. sekund (index.html linje 3060), men
+serveren genscanner aldrig `~/.claude/projects/` eller `~/.codex/sessions/`.
+Pollingen serverer altså den samme døde STATE — nye chatvinduer i VS Code
+dukker først op når serveren genstartes.
+
+### Fix-liste til Codex (prioriteret — ét trin ad gangen, commit per trin)
+
+1. **Rescan-loop (Fund B):** daemon-tråd der hvert ~20.-30. sekund kører en
+   inkrementel scanning (kun jsonl-filer med mtime nyere end sidste scan),
+   merger ind i STATE under `STATE_LOCK`, og kun AI-beriger NYE sessioner
+   (cache dækker resten). Plus `/api/rescan`-endpoint + ↻-knap i UI til
+   manuel fuld genscanning.
+   *Acceptkriterium:* start en ny chat i VS Code → den vises i Command
+   Center inden 30 sek. uden server-genstart; eksisterende titler, pins og
+   omdøbninger overlever.
+2. **Synlige subprocess-fejl:** erstat `stderr=subprocess.DEVNULL` med
+   append til `logs/subprocess.log` i alle `subprocess.Popen`-kald.
+   *Acceptkriterium:* et bevidst forkert CLI-flag efterlader en linje i
+   loggen.
+3. **Extension-åbning (Fund A):** fjern de døde `--command`-args. Test
+   derefter løsninger i denne rækkefølge, og stop ved første der virker:
+   (a) tjek om Claude-/Codex-extensionerne har en auto-åbn/startup-setting
+   der kan embeddes i den genererede `.code-workspace`-fil (eleganteste —
+   ingen timing-problemer); (b) test `code -n <ws> --agents`-flaget (nyt i
+   VS Code, "Opens the agents window"); (c) test URI-handler:
+   `open "vscode://anthropic.claude-code"` o.l.; (d) osascript-keystroke
+   (Cmd+Esc for Claude) efter activate + delay — kræver
+   Accessibility-tilladelse; (e) hvis intet virker: vis toast i CC
+   "Vinduet er åbnet — tryk Cmd+Esc for Claude" og dokumentér begrænsningen
+   her i STATUS.md.
+   *Acceptkriterium:* "Nyt projekt → åbn i VS Code (claude)" ender med et
+   vindue HVOR chat-panelet er synligt uden manuelle klik — eller en ærlig
+   toast, hvis (e) blev endestationen.
+4. **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
 
 ---
 
