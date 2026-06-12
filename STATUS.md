@@ -102,7 +102,7 @@ dukker først op når serveren genstartes.
 
 ### Fix-liste til Codex (prioriteret — ét trin ad gangen, commit per trin)
 
-1. **Rescan-loop (Fund B):** daemon-tråd der hvert ~20.-30. sekund kører en
+1. ✅ **Rescan-loop (Fund B):** daemon-tråd der hvert ~20.-30. sekund kører en
    inkrementel scanning (kun jsonl-filer med mtime nyere end sidste scan),
    merger ind i STATE under `STATE_LOCK`, og kun AI-beriger NYE sessioner
    (cache dækker resten). Plus `/api/rescan`-endpoint + ↻-knap i UI til
@@ -110,6 +110,13 @@ dukker først op når serveren genstartes.
    *Acceptkriterium:* start en ny chat i VS Code → den vises i Command
    Center inden 30 sek. uden server-genstart; eksisterende titler, pins og
    omdøbninger overlever.
+   *Verificeret 2026-06-12:* Ny Codex-chat med titlen `Test af rescan-loop`
+   dukkede op i Command Centers `/api/sessions` uden server-genstart
+   (`129 chats`, status `Klar`).
+   *Testdefinition:* "Ny chat i VS Code" betyder en ny samtale i Claude- eller
+   Codex-sidebaren via `+` / New Chat / New Conversation, efterfulgt af én
+   sendt besked. File-menuens `New File`, `New Text File` og `New Window`
+   opretter ikke en AI-chat og tester derfor ikke rescan-loopet.
 2. **Synlige subprocess-fejl:** erstat `stderr=subprocess.DEVNULL` med
    append til `logs/subprocess.log` i alle `subprocess.Popen`-kald.
    *Acceptkriterium:* et bevidst forkert CLI-flag efterlader en linje i

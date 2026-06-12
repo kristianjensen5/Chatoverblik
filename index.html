@@ -397,6 +397,10 @@
     border-color: var(--accent);
     color: var(--accent);
   }
+  .sidebar-tool-btn:disabled {
+    opacity: 0.6;
+    cursor: wait;
+  }
 
   /* Analyse-modal */
   .analysis-content {
@@ -1204,6 +1208,7 @@
     <div class="sidebar-tools">
       <div class="section-label-mini" style="margin-bottom:8px;">Værktøjer</div>
       <button id="btn-new-project" class="sidebar-tool-btn">🆕 Nyt projekt</button>
+      <button id="btn-rescan" class="sidebar-tool-btn">↻ Genscan chats</button>
       <button id="btn-widgets" class="sidebar-tool-btn">📚 Komponent-bibliotek</button>
       <button id="btn-weekly-retro" class="sidebar-tool-btn">📅 Ugens retro</button>
       <button id="btn-analysis" class="sidebar-tool-btn">📊 Analyse af mit workflow</button>
@@ -2788,6 +2793,26 @@ Denne chat er færdig når: [ét verificerbart bevis, fx 'testet på mobil og de
 
 $("btn-weekly-retro").addEventListener("click", () => showWeeklyRetro());
 $("btn-new-project").addEventListener("click", () => showNewProject());
+$("btn-rescan").addEventListener("click", async () => {
+  const btn = $("btn-rescan");
+  btn.disabled = true;
+  btn.textContent = "↻ Scanner…";
+  try {
+    const r = await mutationFetch("/api/rescan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const d = await r.json();
+    toast(d.status || "Rescan startet");
+    loadSessions();
+  } catch (e) {
+    toast("Kunne ikke genscanne: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ Genscan chats";
+  }
+});
 $("btn-widgets").addEventListener("click", () => showWidgets());
 $("btn-prompting-review").addEventListener("click", () => showPromptingReview());
 

@@ -42,6 +42,7 @@ MODEL = "claude-haiku-4-5-20251001"
 PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
+RESCAN_INTERVAL_SECONDS = 25
 
 # Alle modeller frontend må vælge. Tidligere copy-pasted i 3+ endpoints med
 # forskellige allowlists — workflow-analysis udelukkede tilfældigt haiku.
@@ -220,6 +221,50 @@ def is_bootstrap_message(text):
     return t.startswith(_BOOTSTRAP_PREFIXES)
 
 
+def parse_claude_session_file(f):
+    msgs = parse_jsonl(f)
+    if not msgs:
+        return None
+    cwd = next((m.get("cwd") for m in msgs if m.get("cwd")), "")
+    first_user_text = ""
+    timestamps = []
+    user_count = 0
+    assistant_count = 0
+    for m in msgs:
+        ts = m.get("timestamp")
+        if ts:
+            timestamps.append(ts)
+        msg = m.get("message") or {}
+        role = msg.get("role") or m.get("type")
+        if role == "user":
+            raw = extract_text_from_content(msg.get("content", ""))
+            cleaned = clean_user_text(raw)
+            if cleaned and not is_bootstrap_message(cleaned):
+                user_count += 1
+                if not first_user_text:
+                    first_user_text = cleaned
+        elif role == "assistant":
+            assistant_count += 1
+    if not first_user_text:
+        return None
+    session_id = f.stem
+    path_hint = detect_subfolder_from_paths(cwd, msgs)
+    effective_cwd = path_hint or cwd
+    return {
+        "source": "claude",
+        "id": session_id,
+        "file": str(f),
+        "cwd": effective_cwd,
+        "original_cwd": cwd,
+        "project": project_name_from_cwd(effective_cwd),
+        "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
+        "started": timestamps[0] if timestamps else "",
+        "ended": timestamps[-1] if timestamps else "",
+        "msg_count": user_count + assistant_count,
+        "user_msg_count": user_count,
+    }
+
+
 def scan_claude():
     """Returnér liste af chat-meta fra ~/.claude/projects/*/<session>.jsonl."""
     sessions = []
@@ -229,50 +274,68 @@ def scan_claude():
         if not project_dir.is_dir():
             continue
         for f in project_dir.glob("*.jsonl"):
-            msgs = parse_jsonl(f)
-            if not msgs:
-                continue
-            # Spring sidechains over (subagent-konvos der ligger som top-fil)
-            cwd = next((m.get("cwd") for m in msgs if m.get("cwd")), "")
-            first_user_text = ""
-            timestamps = []
-            user_count = 0
-            assistant_count = 0
-            for m in msgs:
-                ts = m.get("timestamp")
-                if ts:
-                    timestamps.append(ts)
-                msg = m.get("message") or {}
-                role = msg.get("role") or m.get("type")
-                if role == "user":
-                    raw = extract_text_from_content(msg.get("content", ""))
+            session = parse_claude_session_file(f)
+            if session:
+                sessions.append(session)
+    return sessions
+
+
+def parse_codex_session_file(f):
+    msgs = parse_jsonl(f)
+    if not msgs:
+        return None
+    meta = next((m for m in msgs if m.get("type") == "session_meta"), None) or {}
+    payload = meta.get("payload", {}) if isinstance(meta, dict) else {}
+    cwd = payload.get("cwd", "")
+    sess_id = payload.get("id") or f.stem
+    started = payload.get("timestamp") or meta.get("timestamp", "")
+    first_user_text = ""
+    user_count = 0
+    assistant_count = 0
+    last_ts = started
+    for m in msgs:
+        if m.get("timestamp"):
+            last_ts = m["timestamp"]
+        t = m.get("type")
+        p = m.get("payload", {}) if isinstance(m.get("payload"), dict) else {}
+        # Codex event_msg/user_message er den rene tekst brugeren skrev
+        if t == "event_msg" and p.get("type") == "user_message":
+            txt = (p.get("message") or extract_text_from_content(p.get("content", ""))).strip()
+            if txt and not is_bootstrap_message(txt):
+                user_count += 1
+                if not first_user_text:
+                    first_user_text = clean_user_text(txt)
+        elif t == "event_msg" and p.get("type") == "agent_message":
+            assistant_count += 1
+    # Fallback: brug response_item-messages hvis ingen event_msg user_messages fundet
+    if not first_user_text:
+        for m in msgs:
+            if m.get("type") == "response_item":
+                p = m.get("payload", {})
+                if p.get("type") == "message" and p.get("role") == "user":
+                    raw = extract_text_from_content(p.get("content", ""))
                     cleaned = clean_user_text(raw)
                     if cleaned and not is_bootstrap_message(cleaned):
-                        user_count += 1
-                        if not first_user_text:
-                            first_user_text = cleaned
-                elif role == "assistant":
-                    assistant_count += 1
-            if not first_user_text:
-                continue
-            session_id = f.stem
-            # Find evt. faktisk projektmappe via filstier i samtalen
-            path_hint = detect_subfolder_from_paths(cwd, msgs)
-            effective_cwd = path_hint or cwd
-            sessions.append({
-                "source": "claude",
-                "id": session_id,
-                "file": str(f),
-                "cwd": effective_cwd,
-                "original_cwd": cwd,
-                "project": project_name_from_cwd(effective_cwd),
-                "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
-                "started": timestamps[0] if timestamps else "",
-                "ended": timestamps[-1] if timestamps else "",
-                "msg_count": user_count + assistant_count,
-                "user_msg_count": user_count,
-            })
-    return sessions
+                        first_user_text = cleaned
+                        user_count = max(user_count, 1)
+                        break
+    if not first_user_text:
+        return None
+    path_hint = detect_subfolder_from_paths(cwd, msgs)
+    effective_cwd = path_hint or cwd
+    return {
+        "source": "codex",
+        "id": sess_id,
+        "file": str(f),
+        "cwd": effective_cwd,
+        "original_cwd": cwd,
+        "project": project_name_from_cwd(effective_cwd),
+        "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
+        "started": started,
+        "ended": last_ts,
+        "msg_count": user_count + assistant_count,
+        "user_msg_count": user_count,
+    }
 
 
 def scan_codex():
@@ -281,62 +344,48 @@ def scan_codex():
     if not CODEX_DIR.exists():
         return sessions
     for f in CODEX_DIR.rglob("rollout-*.jsonl"):
-        msgs = parse_jsonl(f)
-        if not msgs:
-            continue
-        meta = next((m for m in msgs if m.get("type") == "session_meta"), None) or {}
-        payload = meta.get("payload", {}) if isinstance(meta, dict) else {}
-        cwd = payload.get("cwd", "")
-        sess_id = payload.get("id") or f.stem
-        started = payload.get("timestamp") or meta.get("timestamp", "")
-        first_user_text = ""
-        user_count = 0
-        assistant_count = 0
-        last_ts = started
-        for m in msgs:
-            if m.get("timestamp"):
-                last_ts = m["timestamp"]
-            t = m.get("type")
-            p = m.get("payload", {}) if isinstance(m.get("payload"), dict) else {}
-            # Codex event_msg/user_message er den rene tekst brugeren skrev
-            if t == "event_msg" and p.get("type") == "user_message":
-                txt = (p.get("message") or extract_text_from_content(p.get("content", ""))).strip()
-                if txt and not is_bootstrap_message(txt):
-                    user_count += 1
-                    if not first_user_text:
-                        first_user_text = clean_user_text(txt)
-            elif t == "event_msg" and p.get("type") == "agent_message":
-                assistant_count += 1
-        # Fallback: brug response_item-messages hvis ingen event_msg user_messages fundet
-        if not first_user_text:
-            for m in msgs:
-                if m.get("type") == "response_item":
-                    p = m.get("payload", {})
-                    if p.get("type") == "message" and p.get("role") == "user":
-                        raw = extract_text_from_content(p.get("content", ""))
-                        cleaned = clean_user_text(raw)
-                        if cleaned and not is_bootstrap_message(cleaned):
-                            first_user_text = cleaned
-                            user_count = max(user_count, 1)
-                            break
-        if not first_user_text:
-            continue
-        path_hint = detect_subfolder_from_paths(cwd, msgs)
-        effective_cwd = path_hint or cwd
-        sessions.append({
-            "source": "codex",
-            "id": sess_id,
-            "file": str(f),
-            "cwd": effective_cwd,
-            "original_cwd": cwd,
-            "project": project_name_from_cwd(effective_cwd),
-            "first_user": first_user_text[:PROMPT_PREVIEW_CHARS],
-            "started": started,
-            "ended": last_ts,
-            "msg_count": user_count + assistant_count,
-            "user_msg_count": user_count,
-        })
+        session = parse_codex_session_file(f)
+        if session:
+            sessions.append(session)
     return sessions
+
+
+def iter_chat_files():
+    if CLAUDE_DIR.exists():
+        for project_dir in CLAUDE_DIR.iterdir():
+            if not project_dir.is_dir():
+                continue
+            for f in project_dir.glob("*.jsonl"):
+                yield "claude", f
+    if CODEX_DIR.exists():
+        for f in CODEX_DIR.rglob("rollout-*.jsonl"):
+            yield "codex", f
+
+
+def parse_session_file(source, path):
+    if source == "claude":
+        return parse_claude_session_file(path)
+    if source == "codex":
+        return parse_codex_session_file(path)
+    return None
+
+
+def session_key(session):
+    return f"{session['source']}:{session['id']}"
+
+
+def session_sort_value(session):
+    return session.get("ended") or session.get("started") or ""
+
+
+def collect_chat_file_mtimes():
+    mtimes = {}
+    for _, path in iter_chat_files():
+        try:
+            mtimes[str(path)] = path.stat().st_mtime_ns
+        except OSError:
+            pass
+    return mtimes
 
 
 def project_name_from_cwd(cwd):
@@ -1118,6 +1167,7 @@ def find_code_cli():
 STATE = {
     "sessions": [], "projects": [], "loading": True,
     "status": "Starter…", "cache": {}, "search_index": {},
+    "ext_labels": {}, "file_mtimes": {}, "rescan_running": False,
     # token -> {"cwd": str, "expires_at": float}. Genereres af /api/preview-info,
     # tjekkes af _serve_preview. Sikrer at en LAN-besøgende skal have et levende
     # QR-link for at kunne tilgå projekt-filer — ikke kun et gættet projekt-navn.
@@ -1157,30 +1207,131 @@ def _resolve_preview_token(token):
         return entry["cwd"]
 
 
+def set_status(status):
+    with STATE_LOCK:
+        STATE["status"] = status
+
+
+def perform_rescan(full=False, initial=False):
+    with STATE_LOCK:
+        if STATE["rescan_running"]:
+            return False
+        STATE["rescan_running"] = True
+        STATE["status"] = "Scanner alle chats…" if full else "Scanner nye chats…"
+        if full or initial:
+            STATE["loading"] = True
+        existing_keys = {session_key(s) for s in STATE["sessions"]}
+        previous_mtimes = dict(STATE["file_mtimes"])
+        cache = STATE["cache"] or load_cache()
+
+    try:
+        if full or initial:
+            cache = load_cache()
+            set_status("Scanner Claude-chats…")
+            claude = scan_claude()
+            set_status("Scanner Codex-chats…")
+            codex = scan_codex()
+            set_status("Henter titler fra VS Code…")
+            ext_labels = scan_extension_labels()
+            all_sessions = claude + codex
+            all_sessions.sort(key=session_sort_value, reverse=True)
+            apply_cached_titles(all_sessions, cache, ext_labels)
+            ai_targets = all_sessions if initial else [
+                s for s in all_sessions if session_key(s) not in existing_keys
+            ]
+            set_status("Scanner projekter for live-URLs…")
+            projects = build_projects_index(all_sessions)
+            set_status("Bygger søgeindeks…")
+            search_index = build_search_index(all_sessions)
+            file_mtimes = collect_chat_file_mtimes()
+            with STATE_LOCK:
+                STATE["cache"] = cache
+                STATE["ext_labels"] = ext_labels
+                STATE["sessions"] = all_sessions
+                STATE["projects"] = projects
+                STATE["search_index"] = search_index
+                STATE["file_mtimes"] = file_mtimes
+                STATE["loading"] = False
+        else:
+            current_mtimes = {}
+            changed = []
+            for source, path in iter_chat_files():
+                try:
+                    mtime = path.stat().st_mtime_ns
+                except OSError:
+                    continue
+                current_mtimes[str(path)] = mtime
+                if mtime > previous_mtimes.get(str(path), 0):
+                    changed.append((source, path))
+
+            if not changed:
+                with STATE_LOCK:
+                    STATE["file_mtimes"] = current_mtimes
+                    STATE["status"] = f"Klar ({len(STATE['sessions'])} chats)"
+                return True
+
+            set_status(f"Scanner nye chats ({len(changed)} filer)…")
+            ext_labels = scan_extension_labels()
+            changed_sessions = []
+            for source, path in changed:
+                session = parse_session_file(source, path)
+                if session:
+                    changed_sessions.append(session)
+            apply_cached_titles(changed_sessions, cache, ext_labels)
+            changed_search_index = build_search_index(changed_sessions)
+
+            with STATE_LOCK:
+                existing_by_key = {session_key(s): s for s in STATE["sessions"]}
+                ai_targets = []
+                for session in changed_sessions:
+                    key = session_key(session)
+                    if key not in existing_by_key:
+                        ai_targets.append(session)
+                    existing_by_key[key] = session
+                all_sessions = sorted(
+                    existing_by_key.values(),
+                    key=session_sort_value,
+                    reverse=True,
+                )
+                search_index = dict(STATE["search_index"])
+                search_index.update(changed_search_index)
+
+            projects = build_projects_index(all_sessions)
+            with STATE_LOCK:
+                STATE["ext_labels"] = ext_labels
+                STATE["sessions"] = all_sessions
+                STATE["projects"] = projects
+                STATE["search_index"] = search_index
+                STATE["file_mtimes"] = current_mtimes
+                STATE["loading"] = False
+
+        if ai_targets:
+            set_status(f"Henter AI-titler ({len(ai_targets)} nye chats)…")
+            enrich_with_ai(ai_targets, cache,
+                           status_cb=set_status,
+                           ext_labels=STATE.get("ext_labels", {}))
+        with STATE_LOCK:
+            STATE["status"] = f"Klar ({len(STATE['sessions'])} chats)"
+        return True
+    except Exception as e:
+        print(f"[rescan] {type(e).__name__}: {e}", flush=True)
+        with STATE_LOCK:
+            STATE["status"] = f"Rescan-fejl: {type(e).__name__}"
+        return False
+    finally:
+        with STATE_LOCK:
+            STATE["loading"] = False
+            STATE["rescan_running"] = False
+
+
 def background_load():
-    cache = load_cache()
-    STATE["cache"] = cache
-    STATE["status"] = "Scanner Claude-chats…"
-    claude = scan_claude()
-    STATE["status"] = "Scanner Codex-chats…"
-    codex = scan_codex()
-    STATE["status"] = "Henter titler fra VS Code…"
-    ext_labels = scan_extension_labels()
-    STATE["ext_labels"] = ext_labels
-    all_sessions = claude + codex
-    all_sessions.sort(key=lambda s: s.get("ended") or s.get("started") or "", reverse=True)
-    apply_cached_titles(all_sessions, cache, ext_labels)
-    STATE["sessions"] = all_sessions
-    STATE["status"] = "Scanner projekter for live-URLs…"
-    STATE["projects"] = build_projects_index(all_sessions)
-    STATE["loading"] = False
-    STATE["status"] = f"Bygger søgeindeks…"
-    STATE["search_index"] = build_search_index(all_sessions)
-    STATE["status"] = f"Henter AI-titler ({len(all_sessions)} chats)…"
-    enrich_with_ai(all_sessions, cache,
-                   status_cb=lambda s: STATE.__setitem__("status", s),
-                   ext_labels=ext_labels)
-    STATE["status"] = f"Klar ({len(all_sessions)} chats)"
+    perform_rescan(full=True, initial=True)
+
+
+def rescan_loop():
+    while True:
+        time.sleep(RESCAN_INTERVAL_SECONDS)
+        perform_rescan(full=False)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -1564,6 +1715,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = json.loads(raw.decode("utf-8"))
         except Exception:
             data = {}
+
+        if self.path == "/api/rescan":
+            with STATE_LOCK:
+                running = STATE["rescan_running"]
+            if not running:
+                threading.Thread(target=perform_rescan,
+                                 kwargs={"full": True},
+                                 daemon=True).start()
+            self._send_json({
+                "ok": True,
+                "status": "Rescan kører allerede" if running else "Rescan startet",
+            })
+            return
 
         if self.path == "/api/open-in-windsurf":
             # Routen hedder fortsat 'windsurf' af bagudkompatibilitetshensyn,
@@ -2423,6 +2587,7 @@ CHAT-INDHOLD:
 def main():
     # Start scanning + AI-titler i baggrunden
     threading.Thread(target=background_load, daemon=True).start()
+    threading.Thread(target=rescan_loop, daemon=True).start()
     print(f"\n  Chatoverblik kører på  →  http://localhost:{PORT}\n")
     print("  (Stop med Ctrl+C)\n")
     # Åbn browseren automatisk
