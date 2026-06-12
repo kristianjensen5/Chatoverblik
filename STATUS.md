@@ -117,10 +117,13 @@ dukker først op når serveren genstartes.
    Codex-sidebaren via `+` / New Chat / New Conversation, efterfulgt af én
    sendt besked. File-menuens `New File`, `New Text File` og `New Window`
    opretter ikke en AI-chat og tester derfor ikke rescan-loopet.
-2. **Synlige subprocess-fejl:** erstat `stderr=subprocess.DEVNULL` med
+2. ✅ **Synlige subprocess-fejl:** erstat `stderr=subprocess.DEVNULL` med
    append til `logs/subprocess.log` i alle `subprocess.Popen`-kald.
    *Acceptkriterium:* et bevidst forkert CLI-flag efterlader en linje i
    loggen.
+   *Verificeret 2026-06-12:* `logged_popen(["python3",
+   "--definitely-wrong-command-center-flag"])` skrev kommando + Python-fejl
+   til `logs/subprocess.log`.
 3. **Extension-åbning (Fund A):** fjern de døde `--command`-args. Test
    derefter løsninger i denne rækkefølge, og stop ved første der virker:
    (a) tjek om Claude-/Codex-extensionerne har en auto-åbn/startup-setting

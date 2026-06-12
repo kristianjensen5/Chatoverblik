@@ -36,6 +36,8 @@ HERE = Path(__file__).parent
 MASTERVERSIONER_ROOT = HERE.parent
 CACHE_FILE = HERE / "cache.json"
 INDEX_FILE = HERE / "index.html"
+LOGS_DIR = HERE / "logs"
+SUBPROCESS_LOG_FILE = LOGS_DIR / "subprocess.log"
 PORT = 7777
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-haiku-4-5-20251001"
@@ -53,6 +55,15 @@ ALLOWED_MODELS = {
     "claude-fable-5",
 }
 DEFAULT_MODEL = "claude-sonnet-4-6"
+
+
+def logged_popen(args, **kwargs):
+    LOGS_DIR.mkdir(exist_ok=True)
+    with SUBPROCESS_LOG_FILE.open("a", encoding="utf-8") as log:
+        log.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] $ {' '.join(map(str, args))}\n")
+        log.flush()
+        kwargs.setdefault("stderr", log)
+        return subprocess.Popen(args, **kwargs)
 
 
 def pick_model(requested):
@@ -1788,16 +1799,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 args.extend(cmd_args)
 
                 if code_cli:
-                    subprocess.Popen(args,
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+                    logged_popen(args, stdout=subprocess.DEVNULL)
                 else:
-                    subprocess.Popen(["open", "-a", "Visual Studio Code", workspace_root],
-                                     stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL)
+                    logged_popen(["open", "-a", "Visual Studio Code", workspace_root],
+                                 stdout=subprocess.DEVNULL)
 
-                subprocess.Popen(["osascript", "-e",
-                                  'tell application "Visual Studio Code" to activate'])
+                logged_popen(["osascript", "-e",
+                              'tell application "Visual Studio Code" to activate'])
                 self._send_json({"ok": True, "opened": workspace_root,
                                 "workspace_file": ws_file,
                                 "color": color, "project": project_name})
@@ -2403,7 +2411,7 @@ Begrænsninger:
                 self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
                 return
             try:
-                subprocess.Popen(["open", cwd])
+                logged_popen(["open", cwd])
                 self._send_json({"ok": True})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
@@ -2592,7 +2600,7 @@ def main():
     print("  (Stop med Ctrl+C)\n")
     # Åbn browseren automatisk
     try:
-        subprocess.Popen(["open", f"http://localhost:{PORT}"])
+        logged_popen(["open", f"http://localhost:{PORT}"])
     except Exception:
         pass
     try:
