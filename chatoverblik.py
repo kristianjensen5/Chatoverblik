@@ -45,6 +45,7 @@ PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 RESCAN_INTERVAL_SECONDS = 25
+CLAUDE_CODE_URI = "vscode://anthropic.claude-code/open"
 
 # Alle modeller frontend må vælge. Tidligere copy-pasted i 3+ endpoints med
 # forskellige allowlists — workflow-analysis udelukkede tilfældigt haiku.
@@ -1767,36 +1768,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             mode = data.get("mode", "")
             try:
                 code_cli = find_code_cli()
-                # Kommando-sekvens — kommando-IDer Kristian har verificeret
-                # findes i Command Palette
-                cmd_args = []
-                if mode == "new-chat":
-                    if source == "claude":
-                        # Claude eksponerer ikke en "New Conversation"-kommando
-                        # — vi åbner sidebaren og brugeren klikker "+" selv
-                        cmd_args += [
-                            "--command", "workbench.action.closeAllEditors",
-                            "--command", "claude-vscode.sidebar.open",
-                        ]
-                    elif source == "codex":
-                        # Codex eksponerer chatgpt.newChat som faktisk virker
-                        cmd_args += [
-                            "--command", "workbench.action.closeAllEditors",
-                            "--command", "chatgpt.openSidebar",
-                            "--command", "chatgpt.newChat",
-                        ]
-                else:
-                    if source == "claude":
-                        cmd_args += ["--command", "claude-vscode.sidebar.open"]
-                    elif source == "codex":
-                        cmd_args += ["--command", "chatgpt.openSidebar"]
 
                 # Åbn workspace-FILEN i stedet for folder. .code-workspace files
                 # giver VS Code en unik workspace-identity per projekt, så -n
                 # faktisk skaber et nyt vindue. Hver fil har sin egen farve inline.
                 target = ws_file if ws_file else workspace_root
                 args = [code_cli, "-n", target]
-                args.extend(cmd_args)
 
                 if code_cli:
                     logged_popen(args, stdout=subprocess.DEVNULL)
@@ -1804,8 +1781,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     logged_popen(["open", "-a", "Visual Studio Code", workspace_root],
                                  stdout=subprocess.DEVNULL)
 
+                if mode == "new-chat" and source == "claude":
+                    time.sleep(0.8)
+
                 logged_popen(["osascript", "-e",
                               'tell application "Visual Studio Code" to activate'])
+                if mode == "new-chat" and source == "claude":
+                    time.sleep(0.2)
+                    logged_popen(["open", CLAUDE_CODE_URI])
+
                 self._send_json({"ok": True, "opened": workspace_root,
                                 "workspace_file": ws_file,
                                 "color": color, "project": project_name})

@@ -124,7 +124,7 @@ dukker først op når serveren genstartes.
    *Verificeret 2026-06-12:* `logged_popen(["python3",
    "--definitely-wrong-command-center-flag"])` skrev kommando + Python-fejl
    til `logs/subprocess.log`.
-3. **Extension-åbning (Fund A):** fjern de døde `--command`-args. Test
+3. ✅ **Extension-åbning (Fund A):** fjern de døde `--command`-args. Test
    derefter løsninger i denne rækkefølge, og stop ved første der virker:
    (a) tjek om Claude-/Codex-extensionerne har en auto-åbn/startup-setting
    der kan embeddes i den genererede `.code-workspace`-fil (eleganteste —
@@ -138,6 +138,12 @@ dukker først op når serveren genstartes.
    *Acceptkriterium:* "Nyt projekt → åbn i VS Code (claude)" ender med et
    vindue HVOR chat-panelet er synligt uden manuelle klik — eller en ærlig
    toast, hvis (e) blev endestationen.
+   *Verificeret 2026-06-13:* (a) ingen brugbar Claude startup-setting; (b)
+   `code -n <ws> --agents` åbnede kun et generisk Agents-vindue; (c) virker
+   med rækkefølgen `code -n <workspace>` → aktivér VS Code →
+   `vscode://anthropic.claude-code/open`. Kristian verificerede, at
+   Pauseklovnen-workspace åbner med synlig Claude Code-fane uden manuelle
+   klik.
 4. **Ret linje 45-46 i denne fil** så de matcher virkeligheden efter trin 3.
 
 ---
