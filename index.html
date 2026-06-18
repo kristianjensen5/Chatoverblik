@@ -2347,7 +2347,6 @@ function renderMarkdown(md) {
 const MODEL_LABELS = {
   "claude-sonnet-4-6": "Sonnet 4.6 (~$0.50)",
   "claude-opus-4-8": "Opus 4.8 (~$2.50)",
-  "claude-fable-5": "Fable 5",
 };
 
 function modelPicker(idAttr) {
@@ -2355,7 +2354,6 @@ function modelPicker(idAttr) {
     <select id="${idAttr}" style="font:inherit;font-size:13px;padding:6px 10px;border:1px solid var(--line-strong);border-radius:4px;background:#fff;">
       <option value="claude-sonnet-4-6">Sonnet 4.6 (hurtigere, ~$0.50)</option>
       <option value="claude-opus-4-8">Opus 4.8 (dybere, ~$2.50)</option>
-      <option value="claude-fable-5">Fable 5 (nyeste)</option>
     </select>`;
 }
 
@@ -2595,7 +2593,7 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
 // Adskiller sig fra workflow-analyse ved at se på HVORDAN Kristian skriver
 // sine prompts, ikke HVAD chats handler om. Sender de faktiske first_user-
 // beskeder så modellen kan citere konkrete formuleringer.
-async function showPromptingReview(model = "claude-fable-5", days = 21) {
+async function showPromptingReview(model = "claude-opus-4-8", days = 21) {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🎯 Stil-audit af mine åbnings-formuleringer</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">
@@ -2741,7 +2739,7 @@ List de 3-5 mest relevante memory-entries du har om mig fra Masterversioner-kont
 - \`Masterversioner/context/00_index.md\` — orientering
 - \`Masterversioner/context/01_arbejdsgang.md\` — workflow-regler
 - \`Masterversioner/context/05_lessons.md\` — globale lærte lektier
-- \`Masterversioner/context/07_model_playbook.md\` — hvornår Fable bruges til plan/audit, og hvornår billigere modeller bygger
+- \`Masterversioner/context/07_model_playbook.md\` — hvilken model til hvad (Opus/Codex til plan/audit, Sonnet/Haiku til byggeri)
 ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-brand (CSS, typografi, CMS)\n- `Masterversioner/context/03_security.md` — sikkerheds-baseline\n" : ""}- \`Masterversioner/context/04_widgets.md\` — eksisterende komponenter (måske er der en relevant skabelon)
 - \`Masterversioner/${name}/STATUS.md\` — den tomme status-fil jeg lige har oprettet
 

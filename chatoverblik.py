@@ -54,7 +54,6 @@ ALLOWED_MODELS = {
     "claude-sonnet-4-6",
     "claude-opus-4-8",
     "claude-haiku-4-5-20251001",
-    "claude-fable-5",
 }
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
@@ -2228,8 +2227,8 @@ Begrænsninger:
 
             model_choice = pick_model(data.get("model"))
             try:
-                # Højt max_tokens-loft fordi Fable 5 bruger extended thinking
-                # som default — hvis budgettet er for lavt æder tankerækker
+                # Højt max_tokens-loft fordi en dyb model (Opus) kan bruge
+                # extended thinking — hvis budgettet er for lavt æder tankerækker
                 # alle tokens og text-blokken returnerer tom. 16000 giver
                 # plads til både thinking og det fulde markdown-output.
                 text = call_anthropic(prompt, model=model_choice,
