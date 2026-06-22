@@ -2413,7 +2413,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
       const followupSection = followup
         ? `\n\n---\n\n## Min nye forespørgsel\n\n${followup}`
         : "\n\n---\n\nFortsæt fra 'Hvad mangler' i briefet ovenfor.";
-      return `# Genoptag chat fra projekt: ${d.project}\n\n${brief}${followupSection}`;
+      return `# G: ${d.project}\n\n${brief}${followupSection}`;
     };
 
     async function launchIn(source) {
