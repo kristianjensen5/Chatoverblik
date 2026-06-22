@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-06-12 (Fable-audit: stabilitet som primær indgang)
+**Senest opdateret:** 2026-06-22 (Workspace-fix: alle åbn-flows lander nu i selve projektmappen)
 
 ---
 
@@ -54,6 +54,10 @@ genoptag-guide, ugens retro, og nyt-projekt-flow.
 - ✅ **Auto-åbn workspace-root** — `find_workspace_root()` scanner opad fra cwd til nærmeste CLAUDE.md/AGENTS.md, så Claude/Codex finder chat-historikken korrekt
 - ✅ **Per-projekt Peacock-farver via `.code-workspace`-filer** — hver projekt får sin egen workspace-identity og farve. Genereres i Chatoverblik/.workspaces/
 - ✅ **Nyt projekt-flow** — første-besked-prompt der tvinger AI'en til at læse CLAUDE.md, STATUS.md, WIDGETS.md + bekræfte memory. Claude/Codex extension-vælger inkluderet
+
+### Workspace-fix + genoptag-titel (2026-06-22)
+- ✅ **Genoptag-chat-titel forkortet** til `G: <projekt>` (før: "Genoptag chat fra projekt: X" der blev afkortet til ens-udseende titler i Claude/Codex' sidebar)
+- ✅ **Workspace-tildeling rettet** — Opus-audit fandt at `find_workspace_root` scannede opad efter CLAUDE.md, men kun 3 af 61 projekter har deres egen, så de resterende 58 åbnede hele Masterversioner-roden i stedet for projektmappen. Forværret af at kun genoptag-knappen sendte `keep_cwd`, så resultatet afhang af hvilken knap man klikkede, og `.code-workspace`-filen flip-floppede. Fix: `workspace_root = cwd` altid; `find_workspace_root` + `keep_cwd` fjernet helt. Alle fire åbn-flows (Åbn-knap, chat-modal, genoptag, nyt projekt) lander nu konsistent i selve projektmappen. Stale workspace-filer selv-healer ved næste åbning.
 
 ### Ultra-review-fixes (2026-06-04 + 2026-06-05)
 Multi-agent kode-review (`ULTRA_REVIEW.md`) fandt 15 fund — alle nu lukket eller eksplicit udskudt. Distribueret over 6 PR'er på `dev`-branchen:

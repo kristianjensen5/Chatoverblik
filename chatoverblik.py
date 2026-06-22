@@ -1115,7 +1115,7 @@ def get_project_workspace_file(workspace_root, project_name, color):
     Hvert projekt får sin egen workspace-identity. Det giver:
       - VS Code åbner i NYT VINDUE per projekt (forskellig .code-workspace = forskellig identity)
       - Per-projekt farve (settings inline i workspace-filen, ikke shared via .vscode/)
-      - Stadig Masterversioner som primær folder → Claude-historik virker
+      - Projektmappen selv som primær folder → rigtigt filtræ + Claude-historik per cwd
 
     Filerne ligger i Chatoverblik/.workspaces/ — skjult for brugeren."""
     try:
@@ -1139,21 +1139,6 @@ def get_project_workspace_file(workspace_root, project_name, color):
         return str(ws_file)
     except Exception:
         return None
-
-
-def find_workspace_root(cwd):
-    """Find nærmeste forælder-mappe der indeholder CLAUDE.md eller AGENTS.md.
-    Dette er den 'rigtige' workspace-root for Claude/Codex-extensionerne, så
-    de finder chat-historikken korrekt. Hvis ingen findes returneres cwd selv."""
-    try:
-        p = Path(cwd).resolve()
-    except Exception:
-        return cwd
-    while p != p.parent:
-        if (p / "CLAUDE.md").exists() or (p / "AGENTS.md").exists():
-            return str(p)
-        p = p.parent
-    return cwd
 
 
 def find_code_cli():
@@ -1749,16 +1734,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
                 return
             source = data.get("source", "")
-            # keep_cwd=True: åbn præcis på cwd uden at scanne opad efter
-            # CLAUDE.md. Bruges fra Genoptag-flowet, så nye chats arver den
-            # ORIGINALE chats undermappe og grupperes korrekt — ikke den
-            # bredere Masterversioner-rod. Claude læser stadig CLAUDE.md
-            # selv ved at scanne forældre.
-            keep_cwd = bool(data.get("keep_cwd", False))
-            workspace_root = cwd if keep_cwd else find_workspace_root(cwd)
+            # Åbn ALTID præcis på chattens cwd (projektmappen) — vi scanner
+            # IKKE opad efter CLAUDE.md. Tidligere gjorde en opad-scanning at
+            # de ~58 projekter uden egen CLAUDE.md åbnede hele Masterversioner-
+            # roden i stedet for sig selv. Claude/Codex læser stadig den
+            # nedarvede CLAUDE.md ved selv at scanne forældre, og chat-historik
+            # gemmes per cwd — så projektmappen er den rigtige workspace-rod.
+            workspace_root = cwd
 
             # Find projektnavn til farvevalg + workspace-fil
-            project_name = Path(cwd).name if cwd != workspace_root else Path(workspace_root).name
+            project_name = Path(workspace_root).name
             color = project_color(project_name)
             # Generér per-projekt .code-workspace fil — hvert projekt får sin
             # egen identity, så VS Code åbner i nyt vindue, og hvert vindue har

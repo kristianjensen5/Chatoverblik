@@ -2427,10 +2427,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
         await fetch("/api/open-in-windsurf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // keep_cwd: åbn præcis på chattens cwd uden at scanne opad efter
-          // CLAUDE.md, så den nye chat grupperes under SAMME projekt som den
-          // gamle — ikke under den bredere workspace-root.
-          body: JSON.stringify({ source, cwd: d.cwd, mode: "new-chat", keep_cwd: true }),
+          body: JSON.stringify({ source, cwd: d.cwd, mode: "new-chat" }),
         });
       } catch (e) {
         toast("Prompt kopieret, men kunne ikke åbne VS Code: " + e.message);
