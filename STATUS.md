@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-06-22 (Workspace-fix: alle åbn-flows lander nu i selve projektmappen)
+**Senest opdateret:** 2026-06-23 (To åbn-bugfixes: under-undermappe + vindues-race)
 
 ---
 
@@ -54,6 +54,12 @@ genoptag-guide, ugens retro, og nyt-projekt-flow.
 - ✅ **Auto-åbn workspace-root** — `find_workspace_root()` scanner opad fra cwd til nærmeste CLAUDE.md/AGENTS.md, så Claude/Codex finder chat-historikken korrekt
 - ✅ **Per-projekt Peacock-farver via `.code-workspace`-filer** — hver projekt får sin egen workspace-identity og farve. Genereres i Chatoverblik/.workspaces/
 - ✅ **Nyt projekt-flow** — første-besked-prompt der tvinger AI'en til at læse CLAUDE.md, STATUS.md, WIDGETS.md + bekræfte memory. Claude/Codex extension-vælger inkluderet
+
+### To åbn-bugfixes (2026-06-23)
+Test afslørede at "Åbn i VS Code" landede i forkert workspace. Opus-debug fandt **to separate bugs**:
+- ✅ **Forkert mappe (data):** `detect_subfolder_from_paths` skubbede en chats cwd ned i en under-undermappe når stien blev nævnt ≥5 gange (sker konstant via tool-kald), mens kortets navn altid beregnes på projekt-niveau. Resultat: kort hed "LæsernesVerdenskort" men knappen åbnede `/widget`-undermappen (også ideerogtests/`scripts` ramt — systemisk). Fix: ny `project_root_from_cwd` normaliserer cwd op til projekt-roden (Masterversioner+1), så åbnet mappe altid matcher kortets navn. Bonus: ingen dobbelt-kort, URL/fil-scan kører nu på projekt-roden.
+- ✅ **Forkert vindue (race):** `osascript activate` fyrede øjeblikkeligt efter `code -n`, før det nye vindue var oppe → rev et andet allerede-åbent vindue i front. Fix: activate sker nu KUN i new-chat-flowet; almindelig åbning lader `code -n` styre fokus selv.
+- Fjernet 2 forældreløse cache-workspace-filer (`widget`, `scripts`).
 
 ### Workspace-fix + genoptag-titel (2026-06-22)
 - ✅ **Genoptag-chat-titel forkortet** til `G: <projekt>` (før: "Genoptag chat fra projekt: X" der blev afkortet til ens-udseende titler i Claude/Codex' sidebar)

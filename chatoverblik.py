@@ -261,7 +261,9 @@ def parse_claude_session_file(f):
         return None
     session_id = f.stem
     path_hint = detect_subfolder_from_paths(cwd, msgs)
-    effective_cwd = path_hint or cwd
+    # Normalisér op til projekt-roden, så åbnet mappe matcher kortets navn
+    # (detect_subfolder kan ellers pege på en under-undermappe som .../widget)
+    effective_cwd = project_root_from_cwd(path_hint or cwd)
     return {
         "source": "claude",
         "id": session_id,
@@ -334,7 +336,9 @@ def parse_codex_session_file(f):
     if not first_user_text:
         return None
     path_hint = detect_subfolder_from_paths(cwd, msgs)
-    effective_cwd = path_hint or cwd
+    # Normalisér op til projekt-roden, så åbnet mappe matcher kortets navn
+    # (detect_subfolder kan ellers pege på en under-undermappe som .../widget)
+    effective_cwd = project_root_from_cwd(path_hint or cwd)
     return {
         "source": "codex",
         "id": sess_id,
@@ -411,6 +415,28 @@ def project_name_from_cwd(cwd):
         # Brug undermappens navn — eller "Masterversioner" hvis chatten er på rod-niveau
         return parts[idx + 1] if idx + 1 < len(parts) else "Masterversioner"
     return parts[-1]
+
+
+def project_root_from_cwd(cwd):
+    """Normalisér en cwd OP til projekt-roden — den Masterversioner-direkte
+    undermappe. Det er præcis det niveau project_name_from_cwd navngiver, så
+    den mappe vi ÅBNER altid matcher kortets navn.
+
+    Uden dette kunne en chat der arbejdede meget i en under-undermappe (fx
+    .../LæsernesVerdenskort/widget) få sin cwd skubbet derned af
+    detect_subfolder_from_paths — så kortet hed 'LæsernesVerdenskort' men
+    knappen åbnede 'widget'-undermappen. Vi kapper altid ved projekt-roden."""
+    if not cwd:
+        return cwd
+    # Bevar trailing slash-status ved at arbejde på segmenter
+    parts = cwd.split("/")
+    if "Masterversioner" in parts:
+        idx = parts.index("Masterversioner")
+        # Behold alt til og med Masterversioner + ÉT segment (projekt-roden)
+        keep = parts[: idx + 2] if idx + 1 < len(parts) else parts[: idx + 1]
+        return "/".join(keep)
+    # Uden for Masterversioner kender vi ikke projektstrukturen — lad cwd stå
+    return cwd
 
 
 # ───────── URL-scanning per projekt ─────────
@@ -1773,12 +1799,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     elif source == "codex":
                         extension_uri = CODEX_URI
 
+                # Aktivér KUN VS Code når vi bagefter skal fyre en extension-URI
+                # (new-chat). Ved almindelig åbning lader vi `code -n` selv tage
+                # fokus på det NYE vindue — ellers ville et øjeblikkeligt
+                # 'activate' rive et ANDET, allerede åbent vindue i front før det
+                # nye er oppe (du klikkede ét projekt, men endte i et andet).
                 if extension_uri:
                     time.sleep(0.8)
-
-                logged_popen(["osascript", "-e",
-                              'tell application "Visual Studio Code" to activate'])
-                if extension_uri:
+                    logged_popen(["osascript", "-e",
+                                  'tell application "Visual Studio Code" to activate'])
                     time.sleep(0.2)
                     logged_popen(["open", extension_uri])
 
