@@ -1818,11 +1818,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         folders.append({"name": child.name, "cwd": str(child)})
             self._send_json({"folders": folders})
             return
-        if self.path == "/api/repo-status":
+        if self.path.startswith("/api/repo-status"):
             # On-demand git-scan af alle dashboard-mapper. IKKE på polling-
             # stien (se REPO_STATUS_CACHE_SECONDS) — kun kaldt når dashboardet
-            # åbnes eller ↻ trykkes.
-            self._send_json({"folders": get_repo_status()})
+            # åbnes eller ↻ trykkes. ?force=1 springer cachen over.
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            force = (qs.get("force") or ["0"])[0] == "1"
+            self._send_json({"folders": get_repo_status(force=force)})
             return
         if self.path.startswith("/api/preview-info"):
             from urllib.parse import urlparse, parse_qs, quote

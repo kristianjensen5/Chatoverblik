@@ -1178,9 +1178,20 @@
   }
   .dashboard-card {
     border: 1px solid var(--line-strong);
+    border-left: 3px solid var(--line-strong);
     border-radius: var(--radius);
     background: var(--panel);
     padding: 14px 16px;
+  }
+  .dashboard-card.has-alarm { border-left-color: var(--accent); }
+  .dashboard-card.all-clear { opacity: 0.72; }
+  .dashboard-card.all-clear:hover { opacity: 1; }
+  .dashboard-empty {
+    padding: 40px;
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--display-font);
+    font-size: 16px;
   }
   .dashboard-card h3 {
     font-family: var(--display-font);
@@ -3043,20 +3054,50 @@ const DASHBOARD_LAMPS = [
 async function showDashboard() {
   $("modal-body").classList.add("modal-wide");
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
-    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📊 Status på mine projekter</h2>
+    <div class="modal-title-row" style="margin-bottom:10px;">
+      <h2>📊 Status på mine projekter</h2>
+      <button class="rename-btn" id="dashboard-refresh-btn" title="Genopfrisk (springer 60-sek. cachen over)">↻ Opdater</button>
+    </div>
     <div class="analysis-loading" id="dashboard-loading">Kører git-tjek på alle mapper…</div>
     <div id="dashboard-result" style="display:none;"></div>`;
   openModal();
+  $("dashboard-refresh-btn").addEventListener("click", () => loadDashboard(true));
+  await loadDashboard(false);
+}
+
+async function loadDashboard(force) {
+  const btn = document.getElementById("dashboard-refresh-btn");
+  const loading = document.getElementById("dashboard-loading");
+  const result = document.getElementById("dashboard-result");
+  if (!loading || !result) return; // modal blev lukket undervejs
+
+  if (force && btn) {
+    btn.disabled = true;
+    btn.textContent = "↻ Opdaterer…";
+  } else {
+    loading.style.display = "block";
+    result.style.display = "none";
+  }
 
   try {
-    const r = await fetch("/api/repo-status");
+    const r = await fetch(`/api/repo-status${force ? "?force=1" : ""}`);
     const d = await r.json();
-    $("dashboard-loading").style.display = "none";
-    $("dashboard-result").style.display = "block";
+    loading.style.display = "none";
+    result.style.display = "block";
     renderDashboard(d.folders || []);
   } catch (e) {
-    $("dashboard-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+    loading.style.display = "block";
+    loading.innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "↻ Opdater";
+    }
   }
+}
+
+function dashboardHasAlarm(f) {
+  return DASHBOARD_LAMPS.some(l => f[l.key] === "yellow" || f[l.key] === "red");
 }
 
 function renderDashboard(folders) {
@@ -3067,8 +3108,19 @@ function renderDashboard(folders) {
       <span><span class="lamp-dot red"></span> Handling nødvendig</span>
       <span><span class="lamp-dot gray"></span> Ikke relevant for denne mappe</span>
     </div>`;
-  const cards = folders.map(f => `
-    <div class="dashboard-card">
+
+  if (!folders.length) {
+    $("dashboard-result").innerHTML = legend + `<div class="dashboard-empty">Ingen mapper fundet.</div>`;
+    return;
+  }
+
+  // Kort med mindst én gul/rød lampe øverst, resten (rene/grå) derunder.
+  const sorted = [...folders].sort((a, b) => dashboardHasAlarm(b) - dashboardHasAlarm(a));
+
+  const cards = sorted.map(f => {
+    const alarm = dashboardHasAlarm(f);
+    return `
+    <div class="dashboard-card ${alarm ? "has-alarm" : "all-clear"}">
       <h3 title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</h3>
       <div class="lamp-row">
         ${DASHBOARD_LAMPS.map(l => `
@@ -3077,7 +3129,8 @@ function renderDashboard(folders) {
             <span class="lamp-label">${escapeHTML(l.label)}</span>
           </div>`).join("")}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   $("dashboard-result").innerHTML = legend + `<div class="dashboard-grid">${cards}</div>`;
 }
 
