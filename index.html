@@ -44,6 +44,7 @@
     --claude: #d97757;
     --codex: #1a6b50;
     --lamp-yellow: #c9930f;
+    --lamp-gray: #a19c8f;
     --live: #1a6b50;
     --repo: #555;
     --radius: 6px;
@@ -1163,17 +1164,18 @@
   .dashboard-legend span { display: inline-flex; align-items: center; gap: 5px; }
 
   .lamp-dot {
-    display: inline-block; width: 11px; height: 11px;
+    display: inline-block; width: 13px; height: 13px;
     border-radius: 50%; flex-shrink: 0;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
   }
   .lamp-dot.green  { background: var(--codex); }
   .lamp-dot.yellow { background: var(--lamp-yellow); }
   .lamp-dot.red    { background: var(--accent); }
-  .lamp-dot.gray   { background: var(--line-strong); }
+  .lamp-dot.gray   { background: var(--lamp-gray); }
 
   .dashboard-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 14px;
   }
   .dashboard-card {
@@ -1203,15 +1205,16 @@
     text-overflow: ellipsis;
   }
   .dashboard-card .lamp-row {
-    display: flex; justify-content: space-between;
+    display: flex; gap: 6px;
   }
   .dashboard-card .lamp {
     display: flex; flex-direction: column; align-items: center;
-    gap: 5px; flex: 1;
+    gap: 6px; flex: 1; min-width: 0;
   }
   .dashboard-card .lamp-label {
     font-size: 9px; color: var(--muted);
-    text-align: center; line-height: 1.2;
+    text-align: center; line-height: 1.25;
+    overflow-wrap: anywhere;
   }
 
   .messages { margin-top: 14px; display: grid; gap: 12px; }
@@ -3100,6 +3103,10 @@ function dashboardHasAlarm(f) {
   return DASHBOARD_LAMPS.some(l => f[l.key] === "yellow" || f[l.key] === "red");
 }
 
+const DASHBOARD_STATE_TEXT = {
+  green: "OK", yellow: "Tjek snart", red: "Handling nødvendig", gray: "Ikke relevant",
+};
+
 function renderDashboard(folders) {
   const legend = `
     <div class="dashboard-legend">
@@ -3123,11 +3130,15 @@ function renderDashboard(folders) {
     <div class="dashboard-card ${alarm ? "has-alarm" : "all-clear"}">
       <h3 title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</h3>
       <div class="lamp-row">
-        ${DASHBOARD_LAMPS.map(l => `
-          <div class="lamp">
-            <span class="lamp-dot ${escapeHTML(f[l.key] || "gray")}"></span>
+        ${DASHBOARD_LAMPS.map(l => {
+          const state = f[l.key] || "gray";
+          const title = `${l.label}: ${DASHBOARD_STATE_TEXT[state] || state}`;
+          return `
+          <div class="lamp" title="${escapeHTML(title)}">
+            <span class="lamp-dot ${escapeHTML(state)}"></span>
             <span class="lamp-label">${escapeHTML(l.label)}</span>
-          </div>`).join("")}
+          </div>`;
+        }).join("")}
       </div>
     </div>`;
   }).join("");
