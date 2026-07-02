@@ -699,6 +699,28 @@ def git_status_for(folder):
     return result
 
 
+def dashboard_folders():
+    """Mapperne der får et kort i dashboardet: MASTERVERSIONER_ROOT selv
+    (øverst) + hver umiddelbar undermappe, minus infrastruktur-skiplisten
+    (se dashboard-plan.md afsnit 2 — samme mønster som /api/all-folders,
+    plus _archive/Backups/context/fable bekræftet af Kristian 2026-07-02)."""
+    skip_names = {"node_modules", "__pycache__", ".wrangler",
+                  "Chatoverblik-dist", "_archive", "Backups", "context", "fable"}
+    skip_prefixes = ("cloudflare-backup-",)
+
+    folders = [{"name": MASTERVERSIONER_ROOT.name, "cwd": str(MASTERVERSIONER_ROOT)}]
+    if MASTERVERSIONER_ROOT.exists():
+        for child in sorted(MASTERVERSIONER_ROOT.iterdir(), key=lambda p: p.name.lower()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name in skip_names:
+                continue
+            if any(child.name.startswith(p) for p in skip_prefixes):
+                continue
+            folders.append({"name": child.name, "cwd": str(child)})
+    return folders
+
+
 def build_projects_index(sessions):
     """Lav projekt-index med chat-antal og URLs."""
     by_cwd = {}
