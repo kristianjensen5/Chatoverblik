@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-06-23 (To åbn-bugfixes: under-undermappe + vindues-race)
+**Senest opdateret:** 2026-07-02 (Nyt projekt-dashboard "Status på mine projekter" bygget, trin 1-8 af planen)
 
 ---
 
@@ -35,6 +35,35 @@ genoptag-guide, ugens retro, og nyt-projekt-flow.
 - ✅ Path-baseret detektion af projektmappe (fanger 44 chats der skulle ligge under undermapper i stedet for Masterversioner-roden)
 - ✅ Safari web app med custom ikon
 - ✅ Rebrandet fra "Chatoverblik" → "Command Center" i UI
+
+### Projekt-dashboard "Status på mine projekter" (2026-07-02)
+Bygget efter plan fra Opus (`dashboard-plan.md`), trin 1-8 udført af Sonnet,
+ét trin ad gangen med commit efter hvert (8 commits i Chatoverblik + 1 i
+Masterversioner-roden for `/luk`-ændringen).
+
+- ✅ **Ny knap "📊 Projekt-status"** i Værktøjer-sektionen åbner et bredt
+  modal med ét kort pr. mappe i Masterversioner (60 kort: rod + 59
+  undermapper minus infrastruktur-skipliste).
+- ✅ **5 statuslamper pr. kort** (grøn/gul/rød/grå): Sikret (har mappen et
+  git-remote — "Mistet Mac"-testen), Ændringer (ucommittet?), Pushet (foran
+  sidst-kendte remote?), Deployet (git-tag `deployed` peger på HEAD?),
+  STATUS.md (findes + < 30 dage gammel?). Se `dashboard-plan.md` afsnit 1
+  for præcis lampe-logik.
+- ✅ **`GET /api/repo-status`** — separat on-demand-endpoint (IKKE på
+  4-sekunders-pollingen), 60-sek. in-memory cache, ↻-knap kan bypasse med
+  `?force=1`. Ingen `git fetch` — måler kun mod lokalt kendt remote-state.
+- ✅ **`git tag -f deployed HEAD` tilføjet til `/luk`-skillen** (efter et
+  vellykket deploy) — datakilden til Deployet-lampen. Indtil et projekt får
+  sit første `/luk`-deploy efter denne ændring, viser lampen ærligt
+  rødt/gråt for det projekt (ikke en bug).
+- ✅ Verificeret: unit-tests mod scratch-repos for alle lampe-tilstande,
+  Playwright-browsertest af den kørende server (grid renderer uden overlap,
+  sortering med alarmer øverst, ↻-knap virker, ingen JS-fejl ud over kendt
+  font-CORS på localhost).
+- **Afventer: Kristians eget browser-test** af dashboardet (åbn Command
+  Center → 📊 Projekt-status). Fase 2 (Cloudflare-API som ægte-live-
+  bekræftelse for de 6 wrangler.toml-projekter) er bevidst udskudt — se
+  `dashboard-plan.md` trin 9.
 
 ### Næsten færdig
 - ⏳ Mobile Preview backend virker — men netværks-isolation på Politiken-WiFi blokerer iPhone fra at nå Mac. Skal testes hjemme på privat WiFi.
@@ -180,12 +209,14 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 ## Næste skridt
 
-1. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
-2. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
-3. **Distribuér Command Center til første kollega** — alle distribution-blockers er ude. Tjek først at de hardkodede stier ikke længere er et issue (PR 5).
-4. **Vent på redaktør-feedback** på politiken-widget-services.md
-5. **Hvis grønt lys fra redaktør:** start migration af Cloudflare-konto + GitHub Organization
-6. **Bygge LESSONS.md-viewer** i Command Center så fixede bugs er let tilgængelige per projekt
+1. **Afventer: Kristian tester det nye projekt-dashboard** i browseren (📊 Projekt-status) — se acceptkriterier i `dashboard-plan.md` afsnit 5.
+2. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
+3. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
+4. **Distribuér Command Center til første kollega** — alle distribution-blockers er ude. Tjek først at de hardkodede stier ikke længere er et issue (PR 5).
+5. **Vent på redaktør-feedback** på politiken-widget-services.md
+6. **Hvis grønt lys fra redaktør:** start migration af Cloudflare-konto + GitHub Organization
+7. **Bygge LESSONS.md-viewer** i Command Center så fixede bugs er let tilgængelige per projekt
+8. **(Valgfrit, senere) Fase 2 af dashboardet:** Cloudflare-API-verifikation af den ægte live-commit for de 6 wrangler.toml-projekter — se `dashboard-plan.md` trin 9
 
 ---
 
@@ -226,6 +257,7 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 - `~/Applications/Command Center.app` — min legacy launcher app (kan også bruges hvis Safari web app ikke er nok)
 - `Chatoverblik-dist/` + `Chatoverblik-1.0.zip` — distribution til kollega
 - `ULTRA_REVIEW.md` — rapport fra multi-agent code review (2026-06-04), alle 15 fund + status
+- `dashboard-plan.md` — plan for projekt-dashboardet (lampe-logik, scope-regel, acceptkriterier, trinvis byggeplan)
 
 ## Parallelt spor: politiken.widget
 
