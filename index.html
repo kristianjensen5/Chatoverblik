@@ -43,6 +43,7 @@
     --accent-soft: #f3dcdc;
     --claude: #d97757;
     --codex: #1a6b50;
+    --lamp-yellow: #c9930f;
     --live: #1a6b50;
     --repo: #555;
     --radius: 6px;
@@ -1150,6 +1151,58 @@
     text-align: center;
   }
 
+  /* ───── Projekt-dashboard ("Status på mine projekter") ───── */
+  .modal.modal-wide { width: min(1400px, 96vw); }
+
+  .dashboard-legend {
+    display: flex; flex-wrap: wrap; gap: 14px;
+    font-size: 12px; color: var(--muted);
+    margin-bottom: 18px; padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dashboard-legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+  .lamp-dot {
+    display: inline-block; width: 11px; height: 11px;
+    border-radius: 50%; flex-shrink: 0;
+  }
+  .lamp-dot.green  { background: var(--codex); }
+  .lamp-dot.yellow { background: var(--lamp-yellow); }
+  .lamp-dot.red    { background: var(--accent); }
+  .lamp-dot.gray   { background: var(--line-strong); }
+
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 14px;
+  }
+  .dashboard-card {
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 14px 16px;
+  }
+  .dashboard-card h3 {
+    font-family: var(--display-font);
+    font-weight: 400;
+    font-size: 16px;
+    margin: 0 0 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dashboard-card .lamp-row {
+    display: flex; justify-content: space-between;
+  }
+  .dashboard-card .lamp {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 5px; flex: 1;
+  }
+  .dashboard-card .lamp-label {
+    font-size: 9px; color: var(--muted);
+    text-align: center; line-height: 1.2;
+  }
+
   .messages { margin-top: 14px; display: grid; gap: 12px; }
   .msg {
     border-left: 3px solid var(--line);
@@ -1210,6 +1263,7 @@
       <button id="btn-new-project" class="sidebar-tool-btn">🆕 Nyt projekt</button>
       <button id="btn-rescan" class="sidebar-tool-btn">↻ Genscan chats</button>
       <button id="btn-widgets" class="sidebar-tool-btn">📚 Komponent-bibliotek</button>
+      <button id="btn-dashboard" class="sidebar-tool-btn">📊 Projekt-status</button>
       <button id="btn-weekly-retro" class="sidebar-tool-btn">📅 Ugens retro</button>
       <button id="btn-analysis" class="sidebar-tool-btn">📊 Analyse af mit workflow</button>
       <button id="btn-prompting-review" class="sidebar-tool-btn">🎯 Stil-audit (sidste 3 uger)</button>
@@ -2218,7 +2272,10 @@ function openModal() {
   const closeBtn = $("modal-body").querySelector(".close");
   if (closeBtn) closeBtn.onclick = closeModal;
 }
-function closeModal() { $("modal-bg").classList.remove("open"); }
+function closeModal() {
+  $("modal-bg").classList.remove("open");
+  $("modal-body").classList.remove("modal-wide");
+}
 
 $("modal-bg").addEventListener("click", e => {
   if (e.target === $("modal-bg")) closeModal();
@@ -2809,6 +2866,7 @@ $("btn-rescan").addEventListener("click", async () => {
   }
 });
 $("btn-widgets").addEventListener("click", () => showWidgets());
+$("btn-dashboard").addEventListener("click", () => showDashboard());
 $("btn-prompting-review").addEventListener("click", () => showPromptingReview());
 
 // ─── File browser & code viewer ───
@@ -2971,6 +3029,56 @@ function renderWidgetsEditor(markdown, path) {
       $("widgets-feedback").innerHTML = `<span style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</span>`;
     }
   };
+}
+
+// ─── Projekt-dashboard ("Status på mine projekter") ───
+const DASHBOARD_LAMPS = [
+  { key: "secured", label: "Sikret" },
+  { key: "changes", label: "Ændringer" },
+  { key: "pushed", label: "Pushet" },
+  { key: "deployed", label: "Deployet" },
+  { key: "status_md", label: "STATUS.md" },
+];
+
+async function showDashboard() {
+  $("modal-body").classList.add("modal-wide");
+  $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
+    <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">📊 Status på mine projekter</h2>
+    <div class="analysis-loading" id="dashboard-loading">Kører git-tjek på alle mapper…</div>
+    <div id="dashboard-result" style="display:none;"></div>`;
+  openModal();
+
+  try {
+    const r = await fetch("/api/repo-status");
+    const d = await r.json();
+    $("dashboard-loading").style.display = "none";
+    $("dashboard-result").style.display = "block";
+    renderDashboard(d.folders || []);
+  } catch (e) {
+    $("dashboard-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
+  }
+}
+
+function renderDashboard(folders) {
+  const legend = `
+    <div class="dashboard-legend">
+      <span><span class="lamp-dot green"></span> OK</span>
+      <span><span class="lamp-dot yellow"></span> Tjek snart</span>
+      <span><span class="lamp-dot red"></span> Handling nødvendig</span>
+      <span><span class="lamp-dot gray"></span> Ikke relevant for denne mappe</span>
+    </div>`;
+  const cards = folders.map(f => `
+    <div class="dashboard-card">
+      <h3 title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</h3>
+      <div class="lamp-row">
+        ${DASHBOARD_LAMPS.map(l => `
+          <div class="lamp">
+            <span class="lamp-dot ${escapeHTML(f[l.key] || "gray")}"></span>
+            <span class="lamp-label">${escapeHTML(l.label)}</span>
+          </div>`).join("")}
+      </div>
+    </div>`).join("");
+  $("dashboard-result").innerHTML = legend + `<div class="dashboard-grid">${cards}</div>`;
 }
 
 // ─── Mobile preview ───
