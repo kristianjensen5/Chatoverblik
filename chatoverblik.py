@@ -618,6 +618,87 @@ def scan_project_urls(cwd):
     return [{"kind": k, "url": u} for (u, k) in host_best.values()]
 
 
+# ───────── Git-status per mappe (dashboard) ─────────
+# Ingen `git fetch` — måler kun mod den lokalt kendte remote-position (se
+# dashboard-plan.md afsnit 3, risiko 3). Kaldes kun on-demand fra en manuelt
+# startet server (Terminal/VS Code har Full Disk Access til ~/Documents/);
+# en fremtidig LaunchAgent-variant ville dø stille pga. macOS TCC (exit 78,
+# se context/05_lessons.md).
+def _run_git(folder, args):
+    try:
+        return subprocess.run(
+            ["git", "-C", str(folder)] + args,
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return None
+
+
+def git_status_for(folder):
+    """Beregn statuslampernes tilstande for én projektmappe.
+
+    Returnerer en dict med lampe-tilstande (green|yellow|red|gray) for
+    'secured' (lampe 1), 'changes' (lampe 2), 'pushed' (lampe 3), plus
+    placeholders 'deployed' (lampe 4) og 'status_md' (lampe 5) der fyldes
+    af senere trin — samt rådata (dirty, ahead, behind, has_remote,
+    remote_url) til brug i UI'en.
+    """
+    result = {
+        "secured": "gray",
+        "changes": "gray",
+        "pushed": "gray",
+        "deployed": "gray",
+        "status_md": "gray",
+        "dirty": False,
+        "ahead": 0,
+        "behind": 0,
+        "has_remote": False,
+        "remote_url": None,
+    }
+
+    toplevel = _run_git(folder, ["rev-parse", "--show-toplevel"])
+    if toplevel is None or toplevel.returncode != 0:
+        result["secured"] = "red"
+        return result
+
+    is_own_repo = Path(toplevel.stdout.strip()).resolve() == Path(folder).resolve()
+    if not is_own_repo:
+        # F er ikke sit eget repo (fx nested under et andet, eller
+        # rod-.gitignore holder den ude af root-repoet) → reelt usikret.
+        result["secured"] = "red"
+        return result
+
+    status = _run_git(folder, ["status", "--porcelain"])
+    result["dirty"] = bool(status and status.returncode == 0 and status.stdout.strip())
+    result["changes"] = "yellow" if result["dirty"] else "green"
+
+    remote = _run_git(folder, ["remote"])
+    has_remote = bool(remote and remote.returncode == 0 and remote.stdout.strip())
+    result["has_remote"] = has_remote
+    result["secured"] = "green" if has_remote else "yellow"
+
+    if not has_remote:
+        return result
+
+    remote_url = _run_git(folder, ["remote", "get-url", "origin"])
+    if remote_url and remote_url.returncode == 0 and remote_url.stdout.strip():
+        result["remote_url"] = remote_url.stdout.strip()
+
+    upstream = _run_git(folder, ["rev-parse", "--abbrev-ref", "@{u}"])
+    has_upstream = bool(upstream and upstream.returncode == 0 and upstream.stdout.strip())
+    if not has_upstream:
+        return result  # lampe 3 forbliver gray (intet upstream)
+
+    counts = _run_git(folder, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+    if counts and counts.returncode == 0:
+        parts = counts.stdout.strip().split()
+        if len(parts) == 2:
+            result["behind"], result["ahead"] = int(parts[0]), int(parts[1])
+    result["pushed"] = "yellow" if result["ahead"] > 0 else "green"
+
+    return result
+
+
 def build_projects_index(sessions):
     """Lav projekt-index med chat-antal og URLs."""
     by_cwd = {}
