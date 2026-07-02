@@ -1163,6 +1163,27 @@
   }
   .dashboard-legend span { display: inline-flex; align-items: center; gap: 5px; }
 
+  .dashboard-filters {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 16px;
+  }
+  .dash-filter-btn {
+    background: var(--sidebar);
+    border: 1px solid var(--line-strong);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font: inherit; font-size: 12px; color: var(--ink);
+    cursor: pointer;
+  }
+  .dash-filter-btn:hover { border-color: var(--muted); }
+  .dash-filter-btn.active {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .dash-filter-btn .dash-filter-count {
+    color: var(--muted); font-size: 11px;
+  }
+  .dash-filter-btn.active .dash-filter-count { color: rgba(255,255,255,0.7); }
+
   .lamp-dot {
     display: inline-block; width: 13px; height: 13px;
     border-radius: 50%; flex-shrink: 0;
@@ -3054,7 +3075,11 @@ const DASHBOARD_LAMPS = [
   { key: "status_md", label: "STATUS.md" },
 ];
 
+let DASHBOARD_FOLDERS = [];
+let DASHBOARD_FILTER = "all"; // all | recent | clean | alarm
+
 async function showDashboard() {
+  DASHBOARD_FILTER = "all";
   $("modal-body").classList.add("modal-wide");
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
     <div class="modal-title-row" style="margin-bottom:10px;">
@@ -3087,7 +3112,8 @@ async function loadDashboard(force) {
     const d = await r.json();
     loading.style.display = "none";
     result.style.display = "block";
-    renderDashboard(d.folders || []);
+    DASHBOARD_FOLDERS = d.folders || [];
+    renderDashboard();
   } catch (e) {
     loading.style.display = "block";
     loading.innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(e.message)}</div>`;
@@ -3107,7 +3133,23 @@ const DASHBOARD_STATE_TEXT = {
   green: "OK", yellow: "Tjek snart", red: "Handling nødvendig", gray: "Ikke relevant",
 };
 
-function renderDashboard(folders) {
+const DASHBOARD_FILTERS = [
+  { key: "all", label: "Alle" },
+  { key: "recent", label: "Seneste 20" },
+  { key: "clean", label: "Grønne (færdige)" },
+  { key: "alarm", label: "Mangler" },
+];
+
+function dashboardFilterCount(key, folders) {
+  if (key === "all") return folders.length;
+  if (key === "recent") return Math.min(20, folders.length);
+  if (key === "clean") return folders.filter(f => !dashboardHasAlarm(f)).length;
+  if (key === "alarm") return folders.filter(dashboardHasAlarm).length;
+  return 0;
+}
+
+function renderDashboard() {
+  const folders = DASHBOARD_FOLDERS;
   const legend = `
     <div class="dashboard-legend">
       <span><span class="lamp-dot green"></span> OK</span>
@@ -3121,12 +3163,44 @@ function renderDashboard(folders) {
     return;
   }
 
-  // Kort med mindst én gul/rød lampe øverst, resten (rene/grå) derunder.
-  const sorted = [...folders].sort((a, b) => dashboardHasAlarm(b) - dashboardHasAlarm(a));
+  const filterBar = `
+    <div class="dashboard-filters">
+      ${DASHBOARD_FILTERS.map(f => `
+        <button class="dash-filter-btn${DASHBOARD_FILTER === f.key ? " active" : ""}" data-filter="${f.key}">
+          ${escapeHTML(f.label)} <span class="dash-filter-count">${dashboardFilterCount(f.key, folders)}</span>
+        </button>`).join("")}
+    </div>`;
 
-  const cards = sorted.map(f => {
-    const alarm = dashboardHasAlarm(f);
-    return `
+  let list;
+  if (DASHBOARD_FILTER === "recent") {
+    list = [...folders]
+      .sort((a, b) => (b.last_commit_ts || 0) - (a.last_commit_ts || 0))
+      .slice(0, 20);
+  } else if (DASHBOARD_FILTER === "clean") {
+    list = folders.filter(f => !dashboardHasAlarm(f));
+  } else if (DASHBOARD_FILTER === "alarm") {
+    list = folders.filter(dashboardHasAlarm);
+  } else {
+    // Alle — kort med mindst én gul/rød lampe øverst, resten derunder.
+    list = [...folders].sort((a, b) => dashboardHasAlarm(b) - dashboardHasAlarm(a));
+  }
+
+  const gridOrEmpty = list.length
+    ? `<div class="dashboard-grid">${list.map(renderDashboardCard).join("")}</div>`
+    : `<div class="dashboard-empty">Ingen kort matcher dette filter.</div>`;
+
+  $("dashboard-result").innerHTML = legend + filterBar + gridOrEmpty;
+  $("dashboard-result").querySelectorAll(".dash-filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      DASHBOARD_FILTER = btn.dataset.filter;
+      renderDashboard();
+    });
+  });
+}
+
+function renderDashboardCard(f) {
+  const alarm = dashboardHasAlarm(f);
+  return `
     <div class="dashboard-card ${alarm ? "has-alarm" : "all-clear"}">
       <h3 title="${escapeHTML(f.name)}">${escapeHTML(f.name)}</h3>
       <div class="lamp-row">
@@ -3141,8 +3215,6 @@ function renderDashboard(folders) {
         }).join("")}
       </div>
     </div>`;
-  }).join("");
-  $("dashboard-result").innerHTML = legend + `<div class="dashboard-grid">${cards}</div>`;
 }
 
 // ─── Mobile preview ───

@@ -641,10 +641,10 @@ def git_status_for(folder):
     Returnerer en dict med lampe-tilstande (green|yellow|red|gray) for
     'secured' (lampe 1), 'changes' (lampe 2), 'pushed' (lampe 3) — samt
     rådata (dirty, ahead, behind, has_remote, remote_url, has_deployed_tag,
-    deployed_tag_on_head). 'deployed' (lampe 4) og 'status_md' (lampe 5)
-    sættes her til "gray" som default; begges endelige tilstand beregnes i
-    _compute_repo_status (git_status_for kender hverken URL'er eller
-    STATUS.md-indhold).
+    deployed_tag_on_head, last_commit_ts). 'deployed' (lampe 4) og
+    'status_md' (lampe 5) sættes her til "gray" som default; begges
+    endelige tilstand beregnes i _compute_repo_status (git_status_for
+    kender hverken URL'er eller STATUS.md-indhold).
     """
     result = {
         "secured": "gray",
@@ -659,6 +659,7 @@ def git_status_for(folder):
         "remote_url": None,
         "has_deployed_tag": False,
         "deployed_tag_on_head": False,
+        "last_commit_ts": None,
     }
 
     toplevel = _run_git(folder, ["rev-parse", "--show-toplevel"])
@@ -707,6 +708,11 @@ def git_status_for(folder):
 
     rev_deployed = _run_git(folder, ["rev-list", "-n1", "deployed"])
     result["has_deployed_tag"] = bool(rev_deployed and rev_deployed.returncode == 0)
+
+    # Sidste commit-tidspunkt — bruges af dashboardets "Seneste 20"-filter.
+    log_ts = _run_git(folder, ["log", "-1", "--format=%ct"])
+    if log_ts and log_ts.returncode == 0 and log_ts.stdout.strip().isdigit():
+        result["last_commit_ts"] = int(log_ts.stdout.strip())
 
     return result
 
