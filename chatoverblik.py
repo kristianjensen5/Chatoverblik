@@ -639,13 +639,12 @@ def git_status_for(folder):
     """Beregn statuslampernes tilstande for én projektmappe.
 
     Returnerer en dict med lampe-tilstande (green|yellow|red|gray) for
-    'secured' (lampe 1), 'changes' (lampe 2), 'pushed' (lampe 3), plus
-    placeholder 'status_md' (lampe 5, fyldes af senere trin) — samt rådata
-    (dirty, ahead, behind, has_remote, remote_url, has_deployed_tag,
-    deployed_tag_on_head). 'deployed' (lampe 4) sættes her til "gray" som
-    default; den endelige tilstand kombineres i _compute_repo_status med
-    "live-URL findes" fra scan_project_urls (git_status_for kender ikke
-    URL'er).
+    'secured' (lampe 1), 'changes' (lampe 2), 'pushed' (lampe 3) — samt
+    rådata (dirty, ahead, behind, has_remote, remote_url, has_deployed_tag,
+    deployed_tag_on_head). 'deployed' (lampe 4) og 'status_md' (lampe 5)
+    sættes her til "gray" som default; begges endelige tilstand beregnes i
+    _compute_repo_status (git_status_for kender hverken URL'er eller
+    STATUS.md-indhold).
     """
     result = {
         "secured": "gray",
@@ -732,6 +731,45 @@ def dashboard_folders():
                 continue
             folders.append({"name": child.name, "cwd": str(child)})
     return folders
+
+
+_STATUS_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def status_md_lamp(folder):
+    """Lampe 5: rød hvis ingen STATUS.md; grøn hvis 'Senest opdateret'
+    er < 30 dage gammel; gul hvis filen findes men datoen mangler/er
+    ulæselig/gammel."""
+    path = Path(folder) / "STATUS.md"
+    if not path.exists():
+        return "red"
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return "yellow"
+
+    date_str = None
+    for line in text.splitlines():
+        if "senest opdateret" in line.lower():
+            m = _STATUS_DATE_RE.search(line)
+            if m:
+                date_str = m.group(1)
+            break
+    if not date_str:
+        return "yellow"
+
+    from datetime import date
+    try:
+        year, month, day = (int(part) for part in date_str.split("-"))
+        updated = date(year, month, day)
+    except Exception:
+        return "yellow"
+
+    age_days = (date.today() - updated).days
+    if age_days < 0 or age_days >= 30:
+        return "yellow"
+    return "green"
 
 
 def build_projects_index(sessions):
@@ -1364,6 +1402,7 @@ def _compute_repo_status():
         entry.update(git_status_for(folder["cwd"]))
         urls = scan_project_urls(folder["cwd"])
         entry["urls"] = urls
+        entry["status_md"] = status_md_lamp(folder["cwd"])
 
         has_live_url = any(u["kind"] == "live" for u in urls)
         if not has_live_url:
