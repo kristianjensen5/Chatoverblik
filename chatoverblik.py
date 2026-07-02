@@ -640,9 +640,12 @@ def git_status_for(folder):
 
     Returnerer en dict med lampe-tilstande (green|yellow|red|gray) for
     'secured' (lampe 1), 'changes' (lampe 2), 'pushed' (lampe 3), plus
-    placeholders 'deployed' (lampe 4) og 'status_md' (lampe 5) der fyldes
-    af senere trin — samt rådata (dirty, ahead, behind, has_remote,
-    remote_url) til brug i UI'en.
+    placeholder 'status_md' (lampe 5, fyldes af senere trin) — samt rådata
+    (dirty, ahead, behind, has_remote, remote_url, has_deployed_tag,
+    deployed_tag_on_head). 'deployed' (lampe 4) sættes her til "gray" som
+    default; den endelige tilstand kombineres i _compute_repo_status med
+    "live-URL findes" fra scan_project_urls (git_status_for kender ikke
+    URL'er).
     """
     result = {
         "secured": "gray",
@@ -655,6 +658,8 @@ def git_status_for(folder):
         "behind": 0,
         "has_remote": False,
         "remote_url": None,
+        "has_deployed_tag": False,
+        "deployed_tag_on_head": False,
     }
 
     toplevel = _run_git(folder, ["rev-parse", "--show-toplevel"])
@@ -678,24 +683,31 @@ def git_status_for(folder):
     result["has_remote"] = has_remote
     result["secured"] = "green" if has_remote else "yellow"
 
-    if not has_remote:
-        return result
+    if has_remote:
+        remote_url = _run_git(folder, ["remote", "get-url", "origin"])
+        if remote_url and remote_url.returncode == 0 and remote_url.stdout.strip():
+            result["remote_url"] = remote_url.stdout.strip()
 
-    remote_url = _run_git(folder, ["remote", "get-url", "origin"])
-    if remote_url and remote_url.returncode == 0 and remote_url.stdout.strip():
-        result["remote_url"] = remote_url.stdout.strip()
+        upstream = _run_git(folder, ["rev-parse", "--abbrev-ref", "@{u}"])
+        has_upstream = bool(upstream and upstream.returncode == 0 and upstream.stdout.strip())
+        if has_upstream:
+            counts = _run_git(folder, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
+            if counts and counts.returncode == 0:
+                parts = counts.stdout.strip().split()
+                if len(parts) == 2:
+                    result["behind"], result["ahead"] = int(parts[0]), int(parts[1])
+            result["pushed"] = "yellow" if result["ahead"] > 0 else "green"
+        # intet upstream → lampe 3 forbliver gray
 
-    upstream = _run_git(folder, ["rev-parse", "--abbrev-ref", "@{u}"])
-    has_upstream = bool(upstream and upstream.returncode == 0 and upstream.stdout.strip())
-    if not has_upstream:
-        return result  # lampe 3 forbliver gray (intet upstream)
+    # Lampe 4 (Deployet) rådata — uafhængig af remote/upstream. Kombineres
+    # med "live-URL findes" (fra scan_project_urls) i _compute_repo_status,
+    # jf. dashboard-plan.md afsnit 1.
+    points_at_head = _run_git(folder, ["tag", "--points-at", "HEAD"])
+    if points_at_head and points_at_head.returncode == 0:
+        result["deployed_tag_on_head"] = "deployed" in points_at_head.stdout.split()
 
-    counts = _run_git(folder, ["rev-list", "--left-right", "--count", "@{u}...HEAD"])
-    if counts and counts.returncode == 0:
-        parts = counts.stdout.strip().split()
-        if len(parts) == 2:
-            result["behind"], result["ahead"] = int(parts[0]), int(parts[1])
-    result["pushed"] = "yellow" if result["ahead"] > 0 else "green"
+    rev_deployed = _run_git(folder, ["rev-list", "-n1", "deployed"])
+    result["has_deployed_tag"] = bool(rev_deployed and rev_deployed.returncode == 0)
 
     return result
 
@@ -1338,12 +1350,31 @@ def _resolve_preview_token(token):
 
 
 def _compute_repo_status():
-    """Kør git_status_for + scan_project_urls for hver dashboard-mappe."""
+    """Kør git_status_for + scan_project_urls for hver dashboard-mappe.
+
+    Lampe 4 (Deployet) kombinerer git_status_for's tag-rådata med
+    "live-URL findes" fra scan_project_urls, efter tabellen i
+    dashboard-plan.md afsnit 1:
+    grå = ingen live-URL; rød = live-URL uden deployed-tag;
+    gul = tag findes men ikke på HEAD; grøn = tag peger på HEAD.
+    """
     result = []
     for folder in dashboard_folders():
         entry = {"name": folder["name"], "cwd": folder["cwd"]}
         entry.update(git_status_for(folder["cwd"]))
-        entry["urls"] = scan_project_urls(folder["cwd"])
+        urls = scan_project_urls(folder["cwd"])
+        entry["urls"] = urls
+
+        has_live_url = any(u["kind"] == "live" for u in urls)
+        if not has_live_url:
+            entry["deployed"] = "gray"
+        elif entry["deployed_tag_on_head"]:
+            entry["deployed"] = "green"
+        elif entry["has_deployed_tag"]:
+            entry["deployed"] = "yellow"
+        else:
+            entry["deployed"] = "red"
+
         result.append(entry)
     return result
 
