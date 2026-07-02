@@ -1158,10 +1158,34 @@
   .dashboard-legend {
     display: flex; flex-wrap: wrap; gap: 14px;
     font-size: 12px; color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .dashboard-legend span { display: inline-flex; align-items: center; gap: 5px; }
+
+  .dashboard-lamp-help {
     margin-bottom: 18px; padding-bottom: 14px;
     border-bottom: 1px solid var(--line);
   }
-  .dashboard-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .dashboard-lamp-help summary {
+    font-size: 12px; color: var(--muted);
+    cursor: pointer; user-select: none;
+  }
+  .dashboard-lamp-help summary:hover { color: var(--ink); }
+  .dashboard-lamp-help dl {
+    margin: 10px 0 0; padding: 10px 12px;
+    background: var(--sidebar);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .dashboard-lamp-help dt {
+    font-weight: 700; color: var(--ink);
+    margin-top: 8px;
+  }
+  .dashboard-lamp-help dt:first-child { margin-top: 0; }
+  .dashboard-lamp-help dd {
+    margin: 2px 0 0; color: var(--muted);
+    line-height: 1.5;
+  }
 
   .dashboard-filters {
     display: flex; flex-wrap: wrap; gap: 8px;
@@ -3068,11 +3092,26 @@ function renderWidgetsEditor(markdown, path) {
 
 // ─── Projekt-dashboard ("Status på mine projekter") ───
 const DASHBOARD_LAMPS = [
-  { key: "secured", label: "Sikret" },
-  { key: "changes", label: "Ændringer" },
-  { key: "pushed", label: "Pushet" },
-  { key: "deployed", label: "Deployet" },
-  { key: "status_md", label: "STATUS.md" },
+  {
+    key: "secured", label: "Sikret",
+    help: "Findes der en kopi af mappen uden for denne Mac? 🟢 Ja — mappen har et GitHub-remote. 🟡 Kun gemt lokalt (git-historik, men intet remote). 🔴 Slet ikke git-sporet — ingen historik, ingen backup nogen steder.",
+  },
+  {
+    key: "changes", label: "Ændringer",
+    help: "Har du rettet noget i mappen, som endnu ikke er gemt i git (committet)? 🟢 Alt er gemt. 🟡 Der ligger ugemte rettelser.",
+  },
+  {
+    key: "pushed", label: "Pushet",
+    help: "Er dine gemte (committede) ændringer sendt op på GitHub? 🟢 Ja, alt er sendt op. 🟡 Du har gemt lokalt, men ikke sendt det op endnu — ligger stadig kun på denne Mac.",
+  },
+  {
+    key: "deployed", label: "Deployet",
+    help: "Er den nyeste kode også den, der reelt ligger live på nettet? 🟢 Ja. 🟡 Der er nyere kode end den der er live. 🔴 Projektet har en live-side, men den er aldrig registreret som deployet herfra (kræver et /luk-deploy efter denne funktion blev bygget).",
+  },
+  {
+    key: "status_md", label: "STATUS.md",
+    help: "Har projektet en frisk statusfil? 🟢 Findes og er under 30 dage gammel. 🟡 Findes, men er gammel eller uden læsbar dato. 🔴 Findes slet ikke.",
+  },
 ];
 
 let DASHBOARD_FOLDERS = [];
@@ -3156,7 +3195,15 @@ function renderDashboard() {
       <span><span class="lamp-dot yellow"></span> Tjek snart</span>
       <span><span class="lamp-dot red"></span> Handling nødvendig</span>
       <span><span class="lamp-dot gray"></span> Ikke relevant for denne mappe</span>
-    </div>`;
+    </div>
+    <details class="dashboard-lamp-help">
+      <summary>Hvad måler de 5 lamper?</summary>
+      <dl>
+        ${DASHBOARD_LAMPS.map(l => `
+          <dt>${escapeHTML(l.label)}</dt>
+          <dd>${l.help}</dd>`).join("")}
+      </dl>
+    </details>`;
 
   if (!folders.length) {
     $("dashboard-result").innerHTML = legend + `<div class="dashboard-empty">Ingen mapper fundet.</div>`;
