@@ -1209,9 +1209,9 @@
   .dash-filter-btn.active .dash-filter-count { color: rgba(255,255,255,0.7); }
 
   .lamp-dot {
-    display: inline-block; width: 13px; height: 13px;
+    display: inline-block; width: 18px; height: 18px;
     border-radius: 50%; flex-shrink: 0;
-    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.2);
   }
   .lamp-dot.green  { background: var(--codex); }
   .lamp-dot.yellow { background: var(--lamp-yellow); }
@@ -1220,7 +1220,7 @@
 
   .dashboard-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
     gap: 14px;
   }
   .dashboard-card {
@@ -1257,9 +1257,27 @@
     gap: 6px; flex: 1; min-width: 0;
   }
   .dashboard-card .lamp-label {
-    font-size: 9px; color: var(--muted);
+    font-size: 10px; color: var(--muted);
     text-align: center; line-height: 1.25;
     overflow-wrap: anywhere;
+  }
+
+  .dashboard-card-actions {
+    display: flex; gap: 6px;
+    margin-top: 14px; padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .dashboard-card-actions button {
+    font: inherit; font-family: var(--ui-font);
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 5px 10px;
+    border: 1px solid var(--line-strong);
+    background: #fff; color: var(--muted);
+    border-radius: 3px; cursor: pointer;
+  }
+  .dashboard-card-actions button:hover {
+    border-color: var(--ink); color: var(--ink);
   }
 
   .messages { margin-top: 14px; display: grid; gap: 12px; }
@@ -3243,6 +3261,22 @@ function renderDashboard() {
       renderDashboard();
     });
   });
+  $("dashboard-result").querySelectorAll(".dashboard-card-actions button").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const cwd = btn.dataset.cwd;
+      const action = btn.dataset.action;
+      const endpoint = action === "open-ws" ? "/api/open-in-windsurf" : "/api/open-in-finder";
+      const r = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
+      const d = await r.json();
+      toast(d.ok
+        ? (action === "open-ws" ? "Åbner i VS Code…" : "Åbner i Finder…")
+        : "Fejl: " + (d.error || ""));
+    });
+  });
 }
 
 function renderDashboardCard(f) {
@@ -3260,6 +3294,10 @@ function renderDashboardCard(f) {
             <span class="lamp-label">${escapeHTML(l.label)}</span>
           </div>`;
         }).join("")}
+      </div>
+      <div class="dashboard-card-actions">
+        <button data-cwd="${escapeHTML(f.cwd)}" data-action="open-ws" title="Åbn projektet i VS Code med Claude klar">↗ VS Code</button>
+        <button data-cwd="${escapeHTML(f.cwd)}" data-action="open-finder" title="Vis mappen i Finder">📁 Finder</button>
       </div>
     </div>`;
 }
