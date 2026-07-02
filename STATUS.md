@@ -60,10 +60,25 @@ Masterversioner-roden for `/luk`-ændringen).
   Playwright-browsertest af den kørende server (grid renderer uden overlap,
   sortering med alarmer øverst, ↻-knap virker, ingen JS-fejl ud over kendt
   font-CORS på localhost).
-- **Afventer: Kristians eget browser-test** af dashboardet (åbn Command
-  Center → 📊 Projekt-status). Fase 2 (Cloudflare-API som ægte-live-
-  bekræftelse for de 6 wrangler.toml-projekter) er bevidst udskudt — se
-  `dashboard-plan.md` trin 9.
+- ✅ **Kristian testede live og gav 3 runder feedback — alle rettet samme dag:**
+  - ✅ Label-overlap (lampe-tekst flød sammen uden mellemrum): `min-width:0`
+    + `overflow-wrap:anywhere` på lamp-label, ny dedikeret `--lamp-gray`
+    (var for tæt på kortets egen kant-farve), større prikker med kontur.
+  - ✅ Udfoldelig hjælpeboks ("▸ Hvad måler de 5 lamper?") — forklarer hver
+    lampe + hvad hver farve betyder for netop den, da hover-tooltip alene
+    ikke var tydeligt nok.
+  - ✅ Filter over grid'en: **Alle / Seneste 20 / Grønne (færdige) / Mangler**.
+    "Seneste 20" bruger nyt `last_commit_ts`-felt (`git log -1 --format=%ct`)
+    i `git_status_for()`. Ren client-side filtrering af allerede hentet data.
+  - ✅ Lamper forstørret 13px→18px + kort gjort bredere (240px→270px min,
+    færre kolonner) for bedre overblik.
+  - ✅ **"↗ VS Code" / "📁 Finder"-knapper på hvert kort** — genbruger
+    eksisterende `/api/open-in-windsurf` + `/api/open-in-finder`. Kristian
+    kan nu klikke sig direkte ind i et problem-projekt og rette det derfra
+    (selve commit/push/deploy sker fortsat kun efter hans eget OK i den
+    session — dashboardet auto-fixer intet).
+- Fase 2 (Cloudflare-API som ægte-live-bekræftelse for de 6
+  wrangler.toml-projekter) er bevidst udskudt — se `dashboard-plan.md` trin 9.
 
 ### Næsten færdig
 - ⏳ Mobile Preview backend virker — men netværks-isolation på Politiken-WiFi blokerer iPhone fra at nå Mac. Skal testes hjemme på privat WiFi.
@@ -209,7 +224,7 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 ## Næste skridt
 
-1. **Afventer: Kristian tester det nye projekt-dashboard** i browseren (📊 Projekt-status) — se acceptkriterier i `dashboard-plan.md` afsnit 5.
+1. ✅ ~~Kristian tester det nye projekt-dashboard~~ — testet 2026-07-02, gav 3 runder feedback, alle rettet (se ovenfor). Dashboardet er i drift.
 2. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
 3. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
 4. **Distribuér Command Center til første kollega** — alle distribution-blockers er ude. Tjek først at de hardkodede stier ikke længere er et issue (PR 5).
