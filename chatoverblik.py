@@ -45,6 +45,7 @@ PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 RESCAN_INTERVAL_SECONDS = 25
+REPO_STATUS_CACHE_SECONDS = 60  # /api/repo-status: on-demand, ikke på polling-stien
 CLAUDE_CODE_URI = "vscode://anthropic.claude-code/open"
 CODEX_URI = "vscode://openai.chatgpt/"
 
@@ -1298,6 +1299,9 @@ STATE = {
     # tjekkes af _serve_preview. Sikrer at en LAN-besøgende skal have et levende
     # QR-link for at kunne tilgå projekt-filer — ikke kun et gættet projekt-navn.
     "preview_tokens": {},
+    # /api/repo-status: on-demand git-scan af alle dashboard-mapper.
+    # Aldrig på 4-sekunders-polling-stien — se dashboard-plan.md risiko 2.
+    "repo_status_cache": {"data": None, "computed_at": 0.0},
 }
 # Re-entrant lock omkring alle read-modify-write på STATE og cache.
 # ThreadingHTTPServer + ThreadPoolExecutor til AI-kald gør at flere tråde
@@ -1331,6 +1335,30 @@ def _resolve_preview_token(token):
             STATE["preview_tokens"].pop(token, None)
             return None
         return entry["cwd"]
+
+
+def _compute_repo_status():
+    """Kør git_status_for + scan_project_urls for hver dashboard-mappe."""
+    result = []
+    for folder in dashboard_folders():
+        entry = {"name": folder["name"], "cwd": folder["cwd"]}
+        entry.update(git_status_for(folder["cwd"]))
+        entry["urls"] = scan_project_urls(folder["cwd"])
+        result.append(entry)
+    return result
+
+
+def get_repo_status(force=False):
+    """Returnér repo-status pr. dashboard-mappe, cachet i REPO_STATUS_CACHE_SECONDS."""
+    with STATE_LOCK:
+        cached = STATE["repo_status_cache"]
+        if (not force and cached["data"] is not None
+                and time.time() - cached["computed_at"] < REPO_STATUS_CACHE_SECONDS):
+            return cached["data"]
+    data = _compute_repo_status()
+    with STATE_LOCK:
+        STATE["repo_status_cache"] = {"data": data, "computed_at": time.time()}
+    return data
 
 
 def set_status(status):
@@ -1719,6 +1747,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             and child.name not in skip):
                         folders.append({"name": child.name, "cwd": str(child)})
             self._send_json({"folders": folders})
+            return
+        if self.path == "/api/repo-status":
+            # On-demand git-scan af alle dashboard-mapper. IKKE på polling-
+            # stien (se REPO_STATUS_CACHE_SECONDS) — kun kaldt når dashboardet
+            # åbnes eller ↻ trykkes.
+            self._send_json({"folders": get_repo_status()})
             return
         if self.path.startswith("/api/preview-info"):
             from urllib.parse import urlparse, parse_qs, quote
