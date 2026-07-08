@@ -2860,6 +2860,8 @@ async function showNewProject() {
       const name = d.name || displayName;
       const firstPrompt = `Hej! Jeg ${d.reused ? "fortsætter arbejde på" : "starter et nyt projekt"}: **${name}** (${type}).
 
+Projektet/dagens opgave handler kort fortalt om: [skriv 1-3 sætninger i almindeligt sprog].
+
 Før vi går i gang vil jeg være sikker på du har fuld kontekst. Gør følgende — og bekræft hvert punkt eksplicit:
 
 **1. Memory** (auto-loaded af dig — jeg vil bare se du har den):
@@ -2880,7 +2882,11 @@ ${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-br
 
 Så ved jeg du har den fulde kontekst og ikke bare har "antaget".
 
-Denne chat er færdig når: [ét verificerbart bevis, fx 'testet på mobil og deployet']. Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævner præcis hvad der mangler — især åbne bugs.`;
+Dagens ene mål: [én konkret opgave].
+Vi er færdige når: [ét verificerbart bevis, fx 'testet på mobil og deployet' / 'verificeret med screenshot' / 'deployet og endpoint-testet'].
+Bindende ramme i dag: [vigtigste constraint, fx 'rør ikke mobil', 'læserdata må aldrig online', 'ingen deploy uden OK'].
+
+Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævner præcis hvad der mangler — især åbne bugs.`;
 
       const createdList = (d.created || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
       const skippedList = (d.skipped || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
