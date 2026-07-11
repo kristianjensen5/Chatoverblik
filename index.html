@@ -10,10 +10,6 @@
 <link rel="apple-touch-icon" href="/icon.png">
 <meta name="apple-mobile-web-app-title" content="Command Center">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
 <style>
   @import url("https://use.typekit.net/zoh6esy.css");
 
@@ -1487,6 +1483,53 @@ async function mutationFetch(url, opts) {
   }
 }
 
+function requestAiPayloadApproval(payloadInfo) {
+  return new Promise((resolve) => {
+    const host = $("modal-body");
+    const panel = document.createElement("div");
+    panel.style.cssText = "margin:12px 0;padding:12px;border:1px solid var(--line-strong);background:#fff;border-radius:6px;";
+    panel.innerHTML = `
+      <div class="section-label" style="margin:0 0 6px;">Cloud-AI payload</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        Action: ${escapeHTML(payloadInfo.action || "")} · Model: ${escapeHTML(payloadInfo.model || "")} · Følsomhed: ${escapeHTML(payloadInfo.sensitivity || "")}
+      </div>
+      <textarea readonly style="width:100%;min-height:260px;max-height:50vh;padding:10px;border:1px solid var(--line-strong);border-radius:4px;font:12px ui-monospace,Menlo,monospace;line-height:1.45;background:#f6f4ee;">${escapeHTML(payloadInfo.payload || "")}</textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+        <button id="ai-cancel-send" style="background:transparent;border:1px solid var(--line-strong);padding:8px 12px;border-radius:4px;cursor:pointer;">Annullér</button>
+        <button id="ai-confirm-send" style="background:var(--accent);color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;font-weight:700;">Send til cloud-AI</button>
+      </div>`;
+    host.prepend(panel);
+    $("ai-cancel-send").onclick = () => { panel.remove(); resolve(null); };
+    $("ai-confirm-send").onclick = () => {
+      const hash = payloadInfo.payload_sha256;
+      panel.remove();
+      resolve(hash);
+    };
+  });
+}
+
+async function aiPost(url, payload) {
+  const first = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let data = await first.json();
+  if (!data.requires_confirmation) return { response: first, data };
+
+  const hash = await requestAiPayloadApproval(data);
+  if (!hash) {
+    return { response: first, data: { ok: false, error: "Annulleret før cloud-AI-send" } };
+  }
+  const second = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, ai_confirmed: true, ai_payload_sha256: hash }),
+  });
+  data = await second.json();
+  return { response: second, data };
+}
+
 async function loadSessions() {
   // Spring over hvis en bruger-mutation er i gang — ellers risikerer vi
   // at overskrive optimistiske ændringer med stale poll-data.
@@ -2295,12 +2338,7 @@ function renderChatDetail(s, messages) {
     btn.textContent = "↻ Henter…";
     btn.disabled = true;
     try {
-      const r = await mutationFetch("/api/regenerate-title", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: s.source, id: s.id }),
-      });
-      const d = await r.json();
+      const { data: d } = await aiPost("/api/regenerate-title", { source: s.source, id: s.id });
       if (d.ok) {
         s.ai_title = d.title;
         s.summary = d.summary;
@@ -2504,12 +2542,9 @@ async function showResume(session, model = "claude-sonnet-4-6") {
   $("modal-body").querySelector(".close").onclick = closeModalForResume;
 
   try {
-    const r = await fetch("/api/resume-summary", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: session.source, id: session.id, model }),
+    const { data: d } = await aiPost("/api/resume-summary", {
+      source: session.source, id: session.id, model,
     });
-    const d = await r.json();
     if (!d.ok) {
       $("resume-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "ukendt")}</div>`;
       return;
@@ -2599,11 +2634,15 @@ async function showAnalysis(forceNew = false, model = "claude-sonnet-4-6") {
     $("analysis-loading").textContent = "Analyserer (30-90 sek for Sonnet, 1-2 min for Opus)…";
   }
   try {
-    const opts = forceNew
-      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) }
-      : {};
-    const r = await fetch(endpoint, opts);
-    const d = await r.json();
+    let r, d;
+    if (forceNew) {
+      const result = await aiPost(endpoint, { model });
+      r = result.response;
+      d = result.data;
+    } else {
+      r = await fetch(endpoint);
+      d = await r.json();
+    }
     if (!d.ok) {
       if (!forceNew && r.status === 404) {
         $("analysis-loading").style.display = "none";
@@ -2653,12 +2692,9 @@ async function showHandover(cwd, projectName, forceNew = false, model = "claude-
   openModal();
 
   try {
-    const r = await fetch("/api/project-handover", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cwd, project: projectName, model }),
+    const { data: d } = await aiPost("/api/project-handover", {
+      cwd, project: projectName, model,
     });
-    const d = await r.json();
     if (!d.ok) {
       $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
       return;
@@ -2691,12 +2727,7 @@ async function showWeeklyRetro(model = "claude-sonnet-4-6") {
   openModal();
 
   try {
-    const r = await fetch("/api/weekly-retro", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model }),
-    });
-    const d = await r.json();
+    const { data: d } = await aiPost("/api/weekly-retro", { model });
     if (!d.ok) {
       $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
       return;
@@ -2735,12 +2766,7 @@ async function showPromptingReview(model = "claude-opus-4-8", days = 21) {
   openModal();
 
   try {
-    const r = await fetch("/api/prompting-review", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, days }),
-    });
-    const d = await r.json();
+    const { data: d } = await aiPost("/api/prompting-review", { model, days });
     if (!d.ok) {
       $("analysis-loading").textContent = "Fejl: " + (d.error || "ukendt");
       return;
@@ -3362,6 +3388,10 @@ async function showMobilePreview(cwd, projectName) {
     // Generer QR-kode
     function renderQR(url) {
       const container = document.getElementById("qr-container");
+      if (!window.qrcode) {
+        container.innerHTML = `<div style="font-size:12px;line-height:1.45;text-align:center;color:var(--muted);padding:8px;">QR er deaktiveret i hardening-buildet.<br>Brug URL-feltet.</div>`;
+        return;
+      }
       try {
         const qr = qrcode(0, 'M');
         qr.addData(url);

@@ -2,8 +2,9 @@
 
 Lokal webapp der scanner dine Claude- og Codex-chats og gør dem søgbare,
 grupperer dem per projekt, og giver dig værktøjer (workflow-analyse,
-genoptag-guide, ugens retro). Kører kun på din egen Mac — ingen data forlader
-maskinen undtagen til Anthropic (når AI-titler genereres) hvis du selv aktiverer det.
+genoptag-guide, ugens retro). Kører kun på din egen Mac. Cloud-AI er
+default-deny: en API-key alene sender intet automatisk, og AI-knapper viser den
+præcise payload før du aktivt bekræfter afsendelse.
 
 ---
 
@@ -16,7 +17,7 @@ og kør de små test-kommandoer.
 - [ ] **Python 3.9 eller nyere** — test: `python3 --version`
 - [ ] **VS Code, Windsurf eller Cursor** — Command Center scanner alle tre hvis de er installeret
 - [ ] **Claude Code-extension OG/ELLER Codex-extension** installeret i din editor — uden mindst én af dem er der ingen chats at vise
-- [ ] **En Anthropic API-key** (valgfri men anbefalet — bruges til at AI-generere titler og resuméer for chats). Hent på <https://console.anthropic.com>. Uden den virker app'en, men chats vises med deres første-besked som titel i stedet for pæne AI-titler.
+- [ ] **En Anthropic API-key** (valgfri — bruges kun når du aktivt bekræfter en AI-payload). Hent på <https://console.anthropic.com>. Uden den virker app'en, men AI-analyser og manuelle AI-resuméer kan ikke køres.
 
 ---
 
@@ -65,6 +66,10 @@ source ~/.zshrc
 ```
 
 Indsæt din rigtige nøgle hvor der står `sk-ant-...`.
+
+Nøglen aktiverer ikke automatisk sending af chats. Før en AI-knap sender noget,
+viser Command Center payloaden i en tekstboks og kræver et aktivt klik på
+**Send til cloud-AI**.
 
 ### 3. Start serveren første gang
 

@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-02 (Nyt projekt-dashboard "Status på mine projekter" bygget, trin 1-8 af planen)
+**Senest opdateret:** 2026-07-11 (P0-hardening: distribution, CSP, path-gate, cloud-AI default-deny og regressionstests)
 
 ---
 
@@ -79,6 +79,32 @@ Masterversioner-roden for `/luk`-ændringen).
     session — dashboardet auto-fixer intet).
 - Fase 2 (Cloudflare-API som ægte-live-bekræftelse for de 6
   wrangler.toml-projekter) er bevidst udskudt — se `dashboard-plan.md` trin 9.
+
+### P0-hardening baseline (2026-07-11)
+Fokuseret sikkerheds-sprint uden nye dashboard-/UX-features. Dokumenteret i
+`P0_HARDENING.md`.
+
+- ✅ **Kollegadistribution har én source-of-truth:** `release_manifest.json` +
+  `scripts/build_release.py` + `scripts/release_check.py`. Den gamle
+  `../Chatoverblik-dist` og `../Chatoverblik-1.0.zip` registreres som
+  blokeret legacy og må ikke blive current-pakken.
+- ✅ **Eksekverbar tredjepartskode fjernet fra localhost-origin:** eksterne
+  jsdelivr-script-tags er fjernet fra `index.html`; appen serveres med
+  nonce-baseret CSP, API-svar med `default-src 'none'`, og preview har separat
+  låst CSP.
+- ✅ **Central canonical-path-validator:** `validate_canonical_path()` bruges
+  nu af file-tree, file-content, move-chat og preview. Den blokerer traversal,
+  secrets, datafiler, rå chats/logs/cache og kildenote-mapper.
+- ✅ **Cloud-AI er default-deny:** en `ANTHROPIC_API_KEY` sender ikke længere
+  automatisk chats. Automatisk AI-titelgenerering kræver både
+  `COMMAND_CENTER_AUTO_AI_TITLES=1` og projektmarkør
+  `.command-center-cloud-ai-ok`. Manuelle AI-knapper viser præcis payload og
+  kræver aktiv bekræftelse før cloud-send.
+- ✅ **Regressionstests committed:** CSRF, gammel RCE-rute, path traversal,
+  secret/data/source-note denylist, følsom AI-chat og distributionspakken.
+- ✅ Verificeret lokalt: `python3 -m py_compile ...`,
+  `python3 -m unittest discover -s tests -v` (8 tests OK),
+  `python3 scripts/release_check.py --json` (OK, legacy blokeret).
 
 ### Næsten færdig
 - ⏳ Mobile Preview backend virker — men netværks-isolation på Politiken-WiFi blokerer iPhone fra at nå Mac. Skal testes hjemme på privat WiFi.
@@ -227,7 +253,10 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 1. ✅ ~~Kristian tester det nye projekt-dashboard~~ — testet 2026-07-02, gav 3 runder feedback, alle rettet (se ovenfor). Dashboardet er i drift.
 2. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
 3. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
-4. **Distribuér Command Center til første kollega** — alle distribution-blockers er ude. Tjek først at de hardkodede stier ikke længere er et issue (PR 5).
+4. **Distribuér Command Center til første kollega** via den nye current-pakke:
+   kør `python3 scripts/release_check.py --json`, byg med
+   `python3 scripts/build_release.py`, og del kun manifest-pakken — aldrig
+   `../Chatoverblik-dist` eller `../Chatoverblik-1.0.zip`.
 5. **Vent på redaktør-feedback** på politiken-widget-services.md
 6. **Hvis grønt lys fra redaktør:** start migration af Cloudflare-konto + GitHub Organization
 7. **Bygge LESSONS.md-viewer** i Command Center så fixede bugs er let tilgængelige per projekt
@@ -247,6 +276,11 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 - **Path-baseret projektdetektion** — scan jsonl for filstier under cwd; den hyppigste undermappe vinder (min 5 nævninger)
 - **Symlink AGENTS.md → CLAUDE.md** så Codex og Claude bruger samme regelsæt
 - **localhost:7777** som fast port
+- **Cloud-AI default-deny** — API-key alene sender intet. Manuel cloud-AI kræver
+  payload-preview + SHA-256-bekræftelse; automatisk titelgenerering kræver både
+  env-flag og projektmarkør.
+- **Release-manifest som source-of-truth** — current-kollegapakken bygges kun
+  fra `release_manifest.json`; gamle dist/zip-artefakter er blokeret legacy.
 
 ---
 

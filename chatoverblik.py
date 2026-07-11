@@ -13,6 +13,7 @@ Krav:
 """
 
 import html
+import hashlib
 import http.server
 import json
 import os
@@ -43,11 +44,44 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-haiku-4-5-20251001"
 PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
+CLOUD_AI_AUTO_TITLES = os.environ.get("COMMAND_CENTER_AUTO_AI_TITLES") == "1"
+CLOUD_AI_PROJECT_ALLOW_FILE = ".command-center-cloud-ai-ok"
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 RESCAN_INTERVAL_SECONDS = 25
 REPO_STATUS_CACHE_SECONDS = 60  # /api/repo-status: on-demand, ikke på polling-stien
 CLAUDE_CODE_URI = "vscode://anthropic.claude-code/open"
 CODEX_URI = "vscode://openai.chatgpt/"
+
+APP_CSP = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'; "
+    "connect-src 'self'; "
+    "img-src 'self' data:; "
+    "font-src 'self' https://politiken.dk https://use.typekit.net data:; "
+    "style-src 'self' 'unsafe-inline' https://use.typekit.net; "
+    "script-src 'self' 'nonce-{nonce}'"
+)
+API_CSP = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'"
+PREVIEW_CSP = (
+    "default-src 'self'; "
+    "base-uri 'none'; "
+    "object-src 'none'; "
+    "frame-ancestors 'none'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self' data:; "
+    "media-src 'self'; "
+    "connect-src 'self'"
+)
+
+AI_CONFIRMATION_ERROR = (
+    "Cloud-AI kræver aktivt valg. Gennemgå payload og send igen med "
+    "ai_confirmed=true for at sende den."
+)
 
 # Alle modeller frontend må vælge. Tidligere copy-pasted i 3+ endpoints med
 # forskellige allowlists — workflow-analysis udelukkede tilfældigt haiku.
@@ -810,20 +844,40 @@ def build_projects_index(sessions):
 
 
 # ───────── AI-titler ─────────
-def ai_title_and_summary(session, cache):
-    """Generér {title, summary} for en chat. Cacher per session-id."""
-    cache_key = f"{session['source']}:{session['id']}"
-    if cache_key in cache:
-        return cache[cache_key]
+def project_allows_automatic_cloud_ai(cwd):
+    """Automatisk cloud-AI kræver eksplicit env + projektmarkør."""
+    if not CLOUD_AI_AUTO_TITLES:
+        return False
+    try:
+        project_dir = validate_canonical_path(cwd, purpose="cloud-ai-auto",
+                                              want_dir=True,
+                                              allowed_roots=[MASTERVERSIONER_ROOT])
+    except PathValidationError:
+        return False
+    marker = project_dir / CLOUD_AI_PROJECT_ALLOW_FILE
+    return marker.exists() and marker.is_file()
 
-    if not ANTHROPIC_KEY:
-        cache[cache_key] = {
-            "title": fallback_title(session["first_user"]),
-            "summary": "(AI ikke aktiveret — sæt ANTHROPIC_API_KEY)",
-        }
-        return cache[cache_key]
 
-    prompt = (
+def require_ai_confirmation(data, *, action, model, payload, sensitivity="normal"):
+    """Returnér (ok, response, status). Ingen cloud-AI sendes uden hash-match."""
+    payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    if (data.get("ai_confirmed") is True
+            and data.get("ai_payload_sha256") == payload_hash):
+        return True, None, None
+    return False, {
+        "ok": False,
+        "requires_confirmation": True,
+        "error": AI_CONFIRMATION_ERROR,
+        "action": action,
+        "model": model,
+        "sensitivity": sensitivity,
+        "payload_sha256": payload_hash,
+        "payload": payload,
+    }, 409
+
+
+def build_title_payload(session):
+    return (
         "Du får uddrag af en chat mellem en bruger og en AI-kodeassistent. "
         "Lav et JSON-objekt med to felter:\n"
         '  - "title": maks 6 ord, sigende — fx "Fixede sound-bug i Greenland-scene"\n'
@@ -837,6 +891,23 @@ def ai_title_and_summary(session, cache):
         "Første brugerbesked:\n"
         f"\"\"\"\n{session['first_user'][:PROMPT_PREVIEW_CHARS]}\n\"\"\""
     )
+
+
+def ai_title_and_summary(session, cache, *, manual=False):
+    """Generér {title, summary} for en chat. Cacher per session-id."""
+    cache_key = f"{session['source']}:{session['id']}"
+    if cache_key in cache and not manual:
+        return cache[cache_key]
+
+    if not ANTHROPIC_KEY or (
+            not manual and not project_allows_automatic_cloud_ai(session.get("cwd", ""))):
+        cache[cache_key] = {
+            "title": fallback_title(session["first_user"]),
+            "summary": "(Cloud-AI ikke sendt automatisk — kræver aktivt valg)",
+        }
+        return cache[cache_key]
+
+    prompt = build_title_payload(session)
 
     try:
         text = call_anthropic(prompt, model=MODEL, max_tokens=300, timeout=45)
@@ -1133,6 +1204,106 @@ EXT_TO_LANG = {
 }
 
 
+class PathValidationError(ValueError):
+    def __init__(self, message, status=403):
+        super().__init__(message)
+        self.status = status
+
+
+_DENIED_FILE_NAMES = {
+    ".env", ".dev.vars", "cache.json", "analysis.md",
+    "credentials.json", "secrets.json", "subprocess.log",
+}
+_DENIED_DIR_NAMES = {
+    ".git", ".claude", ".codex", "logs", "cache", "__pycache__",
+    "node_modules", ".wrangler", "data", "datasets", "source_notes",
+    "source-notes", "source notes", "kilde-noter", "kilde_noter",
+    "kildenoter", "kilde noter",
+}
+_DENIED_EXTS = {
+    ".csv", ".tsv", ".xls", ".xlsx", ".sqlite", ".sqlite3", ".db",
+    ".jsonl", ".log", ".key", ".pem", ".p12", ".pfx", ".crt", ".cer",
+}
+_DENIED_NAME_PATTERNS = (
+    "secret", "secrets", "credential", "credentials", "apikey", "api-key",
+    "api_key", "token", "password", "passwd", "kildenote", "kilde-note",
+    "source-note", "source_note",
+)
+
+
+def sensitive_path_reason(path):
+    """Returnér en kort grund hvis en sti aldrig må vises/serveres."""
+    p = Path(path)
+    for part in p.parts:
+        lower = part.lower()
+        if lower in _DENIED_DIR_NAMES:
+            return f"Blokeret mappe: {part}"
+        if lower.startswith(".env"):
+            return "Secrets-filer er blokeret"
+    name = p.name.lower()
+    if name in _DENIED_FILE_NAMES:
+        return f"Blokeret fil: {p.name}"
+    if p.suffix.lower() in _DENIED_EXTS:
+        return f"Blokeret filtype: {p.suffix.lower()}"
+    if any(pattern in name for pattern in _DENIED_NAME_PATTERNS):
+        return "Secrets/kildenoter er blokeret"
+    return ""
+
+
+def _known_project_roots():
+    roots = {str(MASTERVERSIONER_ROOT)}
+    with STATE_LOCK:
+        roots |= {(s.get("cwd") or "").rstrip("/") for s in STATE.get("sessions", [])}
+        roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE.get("projects", [])}
+    return [r for r in roots if r]
+
+
+def _is_relative_to(path, root):
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_canonical_path(raw_path, *, purpose, want_dir=None,
+                            allowed_roots=None, must_exist=True,
+                            deny_sensitive=True):
+    """Central path-gate for file-tree, file-content, move-chat and preview."""
+    if not raw_path:
+        raise PathValidationError("Sti mangler", 400)
+    try:
+        target = Path(str(raw_path)).expanduser().resolve()
+    except Exception:
+        raise PathValidationError("Ugyldig sti", 400)
+
+    if must_exist and not target.exists():
+        raise PathValidationError("Stien findes ikke", 400)
+    if want_dir is True and not target.is_dir():
+        raise PathValidationError("Mappen findes ikke", 400)
+    if want_dir is False and not target.is_file():
+        raise PathValidationError("Filen findes ikke", 400)
+
+    roots = allowed_roots if allowed_roots is not None else _known_project_roots()
+    canonical_roots = []
+    for root in roots:
+        try:
+            canonical_roots.append(Path(str(root)).expanduser().resolve())
+        except Exception:
+            continue
+    if not canonical_roots:
+        raise PathValidationError("Ingen tilladte projektmapper", 403)
+    if not any(target == root or _is_relative_to(target, root)
+               for root in canonical_roots):
+        raise PathValidationError(f"Stien er ikke tilladt for {purpose}", 403)
+
+    if deny_sensitive:
+        reason = sensitive_path_reason(target)
+        if reason:
+            raise PathValidationError(reason, 403)
+    return target
+
+
 def build_file_tree(root, max_depth=4, current_depth=0):
     """Returnér en hierarkisk fil/mappe-struktur fra root.
     Skipper skjulte filer, node_modules og lignende støj."""
@@ -1147,6 +1318,8 @@ def build_file_tree(root, max_depth=4, current_depth=0):
     except Exception:
         return []
     for child in children:
+        if sensitive_path_reason(child):
+            continue
         if child.name in skip_names:
             continue
         if child.name.startswith(".") and child.name not in (".gitignore", ".env.example"):
@@ -1594,6 +1767,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _forbidden(self):
         self.send_response(403)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", API_CSP)
         self.end_headers()
         self.wfile.write("Adgang nægtet — Command Center er kun tilgængelig fra Mac'en\n"
                         "selv. /preview/* er den eneste rute der kan tilgås udefra.".encode("utf-8"))
@@ -1603,14 +1778,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", API_CSP)
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, path, content_type):
+    def _send_file(self, path, content_type, csp=None):
         body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if csp:
+            self.send_header("Content-Security-Policy", csp)
         # Tillad cache for static-assets, men ikke HTML (så reload ses)
         if not content_type.startswith("text/html"):
             self.send_header("Cache-Control", "public, max-age=300")
@@ -1650,20 +1830,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b"Preview-link er udl\xc3\xb8bet eller ugyldigt")
             return
 
-        # Sikkerhed 2: ingen path-traversal
-        base = Path(cwd).resolve()
         try:
-            target = (base / sub_path).resolve()
-        except Exception:
-            self.send_response(400)
+            base = validate_canonical_path(cwd, purpose="preview-base", want_dir=True,
+                                           allowed_roots=[MASTERVERSIONER_ROOT])
+            target = validate_canonical_path(base / sub_path, purpose="preview",
+                                             want_dir=False, allowed_roots=[base])
+        except PathValidationError as e:
+            self.send_response(e.status)
             self.end_headers()
-            return
-        if not (target == base or str(target).startswith(str(base) + "/")):
-            self.send_response(403)
-            self.end_headers()
+            self.wfile.write(str(e).encode("utf-8"))
             return
 
-        # Sikkerhed 3: kun whitelistede filtyper
+        # Sikkerhed 2: kun whitelistede filtyper
         if target.is_file() and target.suffix.lower() not in _PREVIEW_EXTS:
             self.send_response(403)
             self.end_headers()
@@ -1680,7 +1858,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ctype = "application/octet-stream"
         if target.suffix.lower() in (".html", ".htm"):
             ctype = "text/html; charset=utf-8"
-        self._send_file(target, ctype)
+        self._send_file(target, ctype, csp=PREVIEW_CSP)
 
     def do_GET(self):
         # Ekstern adgang: kun /preview/* — alt andet er forbudt
@@ -1695,13 +1873,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # Injicér app-mappens absolutte sti så "Server kører ikke"-badgen
             # kan vise hvor start.command ligger (browseren kender ikke selv
             # filsystem-stien når siden serveres over http).
+            nonce = secrets.token_urlsafe(16)
             html = INDEX_FILE.read_text(encoding="utf-8")
             html = html.replace("__APP_DIR__", str(HERE))
+            html = html.replace("<script>", f'<script nonce="{nonce}">', 1)
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", APP_CSP.format(nonce=nonce))
             self.end_headers()
             self.wfile.write(body)
             return
@@ -1730,48 +1912,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             cwd = (qs.get("cwd") or [""])[0]
-            if not cwd or not Path(cwd).is_dir():
-                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+            try:
+                root = validate_canonical_path(cwd, purpose="file-tree", want_dir=True)
+            except PathValidationError as e:
+                self._send_json({"ok": False, "error": str(e)}, e.status)
                 return
-            # Sikkerhed: skal være under et kendt projekt eller Masterversioner.
-            # Filtrér tomme strenge fra — ellers ville startswith(""+"/") matche
-            # ENHVER absolut sti og åbne for path-traversal.
-            valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
-            valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
-            valid_roots.add(str(MASTERVERSIONER_ROOT))
-            valid_roots = {r for r in valid_roots if r}
-            cwd_norm = cwd.rstrip("/")
-            allowed = any(cwd_norm == r or cwd_norm.startswith(r + "/") for r in valid_roots)
-            if not allowed:
-                self._send_json({"ok": False, "error": "Mappen er ikke tilladt"}, 403)
-                return
-            tree = build_file_tree(Path(cwd), max_depth=4)
-            self._send_json({"ok": True, "tree": tree, "root": cwd})
+            tree = build_file_tree(root, max_depth=4)
+            self._send_json({"ok": True, "tree": tree, "root": str(root)})
             return
 
         if self.path.startswith("/api/file-content"):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             file_path = (qs.get("path") or [""])[0]
-            if not file_path or not Path(file_path).is_file():
-                self._send_json({"ok": False, "error": "Fil findes ikke"}, 400)
-                return
-            # Sikkerhed: skal være under et kendt projekt eller Masterversioner.
-            # Filtrér tomme strenge fra — ellers ville startswith(""+"/") matche
-            # ENHVER absolut sti og åbne for path-traversal.
-            valid_roots = {(s.get("cwd") or "").rstrip("/") for s in STATE["sessions"]}
-            valid_roots |= {(p.get("cwd") or "").rstrip("/") for p in STATE["projects"]}
-            valid_roots.add(str(MASTERVERSIONER_ROOT))
-            valid_roots = {r for r in valid_roots if r}
             try:
-                target = Path(file_path).resolve()
-            except Exception:
-                self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
-                return
-            target_str = str(target)
-            allowed = any(target_str == r or target_str.startswith(r + "/") for r in valid_roots)
-            if not allowed:
-                self._send_json({"ok": False, "error": "Filen er ikke tilladt"}, 403)
+                target = validate_canonical_path(file_path, purpose="file-content",
+                                                 want_dir=False)
+            except PathValidationError as e:
+                self._send_json({"ok": False, "error": str(e)}, e.status)
                 return
             # Størrelses- og typebegrænsninger
             size = target.stat().st_size
@@ -1787,7 +1945,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             self._send_json({
                 "ok": True,
-                "path": target_str,
+                "path": str(target),
                 "size": size,
                 "language": lang,
                 "content": content,
@@ -1837,22 +1995,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs, quote
             qs = parse_qs(urlparse(self.path).query)
             cwd = (qs.get("cwd") or [""])[0]
-            if not cwd or not Path(cwd).is_dir():
-                self._send_json({"ok": False, "error": "Mappen findes ikke"}, 400)
+            try:
+                base = validate_canonical_path(cwd, purpose="preview-info", want_dir=True)
+            except PathValidationError as e:
+                self._send_json({"ok": False, "error": str(e)}, e.status)
                 return
-            base = Path(cwd)
             # Find HTML-filer i roden + 1-2 niveauer dybt (mange projekter har widget/index.html)
             html_files = []
             for f in sorted(base.glob("*.html")):
-                html_files.append(f.name)
+                if not sensitive_path_reason(f):
+                    html_files.append(f.name)
             for sub in sorted(base.iterdir()):
-                if sub.is_dir() and not sub.name.startswith(".") and sub.name not in ("node_modules", "logs", "__pycache__", ".wrangler"):
+                if (sub.is_dir() and not sub.name.startswith(".")
+                        and not sensitive_path_reason(sub)):
                     for f in sorted(sub.glob("*.html")):
-                        html_files.append(f"{sub.name}/{f.name}")
+                        if not sensitive_path_reason(f):
+                            html_files.append(f"{sub.name}/{f.name}")
                     for sub2 in sorted(sub.iterdir()):
-                        if sub2.is_dir() and not sub2.name.startswith("."):
+                        if (sub2.is_dir() and not sub2.name.startswith(".")
+                                and not sensitive_path_reason(sub2)):
                             for f in sorted(sub2.glob("*.html"))[:3]:
-                                html_files.append(f"{sub.name}/{sub2.name}/{f.name}")
+                                if not sensitive_path_reason(f):
+                                    html_files.append(f"{sub.name}/{sub2.name}/{f.name}")
             if not html_files:
                 self._send_json({"ok": False, "error": "Ingen HTML-fil fundet i projektet"}, 400)
                 return
@@ -1865,7 +2029,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # Token erstatter den tidligere base64-cwd: ikke-gættelig adgangs-
             # nøgle med 1-times TTL. Frontend bruger token til at omkonstruere
             # URL'en hvis brugeren skifter HTML-fil i dropdown.
-            token = _new_preview_token(cwd.rstrip("/"))
+            token = _new_preview_token(str(base))
             # URL-encode hver sti-komponent så filer med æ/ø/å og mellemrum virker
             url_path = "/".join(quote(part) for part in index_file.split("/"))
             url = f"http://{ip}:{PORT}/preview/{token}/{url_path}"
@@ -2124,6 +2288,13 @@ Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværend
                 return
 
             model_choice = pick_model(data.get("model"))
+            ok, response, status = require_ai_confirmation(
+                data, action="workflow-analysis", model=model_choice,
+                payload=prompt, sensitivity="chat-index"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
             try:
                 text = call_anthropic(prompt, model=model_choice,
                                       max_tokens=4000, timeout=180)
@@ -2241,6 +2412,13 @@ eller chats hvis nævnt.
 Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
 
             model_choice = pick_model(data.get("model"))
+            ok, response, status = require_ai_confirmation(
+                data, action="project-handover", model=model_choice,
+                payload=prompt, sensitivity="project"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
             try:
                 text = call_anthropic(prompt, model=model_choice,
                                       max_tokens=2500, timeout=120)
@@ -2326,6 +2504,13 @@ Vær konkret, kort, ærlig. Skriv på dansk.
 En ting der overraskede dig i mønstrene"""
 
             model_choice = pick_model(data.get("model"))
+            ok, response, status = require_ai_confirmation(
+                data, action="weekly-retro", model=model_choice,
+                payload=prompt, sensitivity="chat-index"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
             try:
                 text = call_anthropic(prompt, model=model_choice,
                                       max_tokens=2000, timeout=90)
@@ -2456,6 +2641,13 @@ Begrænsninger:
 """
 
             model_choice = pick_model(data.get("model"))
+            ok, response, status = require_ai_confirmation(
+                data, action="prompting-review", model=model_choice,
+                payload=prompt, sensitivity="chat"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
             try:
                 # Højt max_tokens-loft fordi en dyb model (Opus) kan bruge
                 # extended thinking — hvis budgettet er for lavt æder tankerækker
@@ -2652,10 +2844,22 @@ Begrænsninger:
                 # Bevar evt. user_title (manuel omdøbning) men fjern AI-felter
                 user_title = (cache.get(key) or {}).get("user_title", "")
                 pinned = (cache.get(key) or {}).get("pinned", False)
+            if not ANTHROPIC_KEY:
+                self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
+                return
+            payload = build_title_payload(session)
+            ok, response, status = require_ai_confirmation(
+                data, action="regenerate-title", model=MODEL,
+                payload=payload, sensitivity="chat"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
+            with STATE_LOCK:
                 cache.pop(key, None)
             # AI-kald uden for locken (kan tage 5-30s) — ai_title_and_summary
             # tager selv locken når den merger ind i cachen.
-            result = ai_title_and_summary(session, cache)
+            result = ai_title_and_summary(session, cache, manual=True)
             with STATE_LOCK:
                 entry = cache.get(key) or {}
                 if user_title: entry["user_title"] = user_title
@@ -2741,6 +2945,13 @@ Spring sektionen over hvis der ingen er.
 CHAT-INDHOLD:
 {chat_text}"""
             model_choice = pick_model(data.get("model"))
+            ok, response, status = require_ai_confirmation(
+                data, action="resume-summary", model=model_choice,
+                payload=prompt, sensitivity="chat"
+            )
+            if not ok:
+                self._send_json(response, status)
+                return
             try:
                 text = call_anthropic(prompt, model=model_choice,
                                       max_tokens=2000, timeout=90)
@@ -2765,9 +2976,14 @@ CHAT-INDHOLD:
             source = data.get("source", "")
             sess_id = data.get("id", "")
             target_cwd = (data.get("target_cwd") or "").rstrip("/")
-            if not target_cwd or not Path(target_cwd).is_dir():
-                self._send_json({"ok": False, "error": "Mål-mappen findes ikke"}, 400)
+            try:
+                target_path = validate_canonical_path(target_cwd, purpose="move-chat",
+                                                      want_dir=True,
+                                                      allowed_roots=[MASTERVERSIONER_ROOT])
+            except PathValidationError as e:
+                self._send_json({"ok": False, "error": str(e)}, e.status)
                 return
+            target_cwd = str(target_path)
             key = f"{source}:{sess_id}"
             with STATE_LOCK:
                 cache = STATE["cache"]

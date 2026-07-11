@@ -14,6 +14,7 @@ __pycache__/
 
 # Test-output
 /tmp/
+release/
 
 # API-key gemt af install-script
 .env
