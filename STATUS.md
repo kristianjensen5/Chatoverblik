@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-11 (P0-hardening: distribution, CSP, path-gate, cloud-AI default-deny og regressionstests)
+**Senest opdateret:** 2026-07-21 (sorteringsfejl i projektlisten rettet og verificeret. Projektet er stadig pauset for distribution: P0-sikkerhedsgate er NO-GO pga. B1, og kollegapilot kræver desuden en separat readiness-gate, se pause-checkpoint.)
 
 ---
 
@@ -80,6 +80,32 @@ Masterversioner-roden for `/luk`-ændringen).
 - Fase 2 (Cloudflare-API som ægte-live-bekræftelse for de 6
   wrangler.toml-projekter) er bevidst udskudt — se `dashboard-plan.md` trin 9.
 
+### Sorteringsfix i projektlisten (2026-07-21)
+Kristian meldte at "Senest aktive" ikke afspejlede virkeligheden: Kristians
+mentor — brugt samme dag og hele ugen — lå nr. 4, mens MacGameBridge (urørt i
+en uge) lå nr. 3. Samme symptom inde i en projektgruppe.
+
+- ✅ **Root cause:** `filterAndSort()` sorterer korrekt efter nyhed, men kører
+  derefter et sidste trin der løfter pinnede chats (★) til toppen.
+  `renderGrid()` grupperede så med `new Map()`, som bevarer insertion-order —
+  grupperne arvede altså rækkefølgen fra pin-løftet, ikke fra nyheds-
+  sorteringen. Tre gamle pinnede chats (Chatoverblik 22/6, Generelle
+  spørgsmål 18/6, MacGameBridge 9/6) trak hele deres projekt op i toppen.
+- ✅ **Beslutning (Kristian):** ★ skal kun påvirke rækkefølgen INDE i et
+  projekt. Projekt-rækkefølgen bestemmes udelukkende af nyeste aktivitet.
+- ✅ **Fix:** `s._order = i` noteres før pin-løftet
+  ([index.html:1761-1764](index.html#L1761-L1764)); grupperne sorteres efter
+  laveste `_order` i gruppen ([index.html:1876-1885](index.html#L1876-L1885)).
+  Følger automatisk med når brugeren skifter sorteringsvalg eller søger.
+- ✅ **Verificeret:** de faktiske funktioner klippet ud af `index.html` med
+  `sed` på linjenumre og kørt i Node mod 184 rigtige chats fra
+  `/api/sessions`. Resultat: projekter i faldende nyhedsorden, pinnet chat
+  stadig øverst inde i sit eget projekt. Kristian bekræftede derefter selv i
+  browseren at rækkefølgen er rigtig.
+- ✅ Logget i ny `LESSONS.md` + `context/05_lessons.md` (fælden er generel:
+  insertion-order i en Map er ikke en sortering, det er et biprodukt).
+- ⚠️ **B1 er IKKE rørt** i denne session — den står fortsat åben, se nedenfor.
+
 ### P0-hardening baseline (2026-07-11)
 Fokuseret sikkerheds-sprint uden nye dashboard-/UX-features. Dokumenteret i
 `P0_HARDENING.md`.
@@ -105,6 +131,70 @@ Fokuseret sikkerheds-sprint uden nye dashboard-/UX-features. Dokumenteret i
 - ✅ Verificeret lokalt: `python3 -m py_compile ...`,
   `python3 -m unittest discover -s tests -v` (8 tests OK),
   `python3 scripts/release_check.py --json` (OK, legacy blokeret).
+
+### Uafhængig release-gate (Opus, 2026-07-12) — NO-GO til P0-godkendelse
+Read-only gate af P0-sprintet. **Sikkerhedssubstansen bestod alt:** RCE væk (ingen
+`shell=True`/`os.system`/`open-in-terminal`, alle subprocess list-form), CSRF +
+5 MB body-cap ægte og håndhævet i `do_POST`, central `validate_canonical_path()`
+brugt af file-tree/file-content/move-chat/preview (resolver symlinks → escape
+dækket, traversal + secrets/CSV/data/kildenoter blokeret), cloud-AI default-deny
+(auto kræver env-flag + `.command-center-cloud-ai-ok`; manuel kræver
+SHA-256-payload-bekræftelse → følsom chat sender 0 tegn), 8/8 tests OK,
+`release_check.py` OK, release-zip **byte-identisk reproducerbar** fra manifestet
+(kun de 7 tilladte filer), legacy blokeret.
+
+**Blocker B1 (skal fixes før pilot):** Den nye `script-src 'self' 'nonce-{nonce}'`
+(uden `unsafe-inline`/`unsafe-hashes`) blokerer 3 inline-`onclick` i `index.html`:
+- [index.html:1897](index.html#L1897) + [index.html:1890](index.html#L1890):
+  `proj-header-actions` / url-chips mister `stopPropagation` → **hvert klik på
+  en projekt-header-knap (📖/📄/📱/↗/📁) folder samtidig hele projektgruppen.**
+- [index.html:1590](index.html#L1590): 📋 Kopiér sti-knappen (server-nede-badge) helt død.
+- **Root-cause i proces:** CSP-testen tjekker kun CSP-*teksten*, ikke at appen
+  kører under den (regel 14-hul — ingen browser-smoke-test af CSP-ændringen).
+- **Fix:** 3 `onclick` → `addEventListener`/delegering (som resten af appen),
+  derefter én browser-test der bekræfter: klik header-knap folder IKKE gruppen,
+  og console er fri for CSP-violations. Så er det rent GO.
+
+**Ikke-blokerende noter ved pausen:** (1) `release_check.py` bygger sin egen
+in-memory-zip og validerer ikke selve disk-artefaktet
+`release/Chatoverblik-current.zip`. (2) `INSTALL.md:151` undersælger
+default-deny. (3) `README.md` er stadig en stub. (4) Kildenote-detektion er
+navne-/mappe-baseret; en løs kilde-note `.md` i en projektrod uden
+"kilde"/"source" i navnet ville kunne vises. Den tidligere misvisende legacy-
+tekst under "Vigtige filer" er rettet i pause-checkpointet nedenfor.
+
+### Pause-checkpoint (Kristian + Codex, 2026-07-12)
+
+Projektet er **bevidst pauset**. Git stod ved pausen på `dev`, commit `5a5e161`
+(`Harden command center baseline`); eneste lokale ændring er denne `STATUS.md`
+(Opus-gate + dette handoff). Der er ikke lavet nyt commit, push eller deploy herfra.
+
+- **Må ikke deles nu:** Det eksisterende
+  `release/Chatoverblik-current.zip` er bygget før B1 er rettet og er derfor
+  NO-GO. Det skal genbygges og kontrolleres igen efter fixet.
+- **Første og eneste kodeopgave ved genoptagelse:** Ret B1's tre inline
+  `onclick`, og verificér under den rigtige CSP i browseren. Bland ikke de
+  øvrige reviewspor ind i samme fix.
+- **P0-GO er ikke automatisk pilot-GO:** Opus-gaten var afgrænset til P0-
+  hardeningen. En kollegapilot kræver bagefter en kort, separat readiness-gate
+  for tre stadig kodeverificerede workflowproblemer:
+  1. **Installation/bootstrap:** Nyt-projekt-flowet kan stadig skrive en tom
+     STATUS hvis `context/06_status_template.md` ikke findes, opretter en svag
+     `.gitignore`, hardcoder `Masterversioner` og udelader obligatorisk
+     `context/08_repo_politik.md` (`chatoverblik.py:2709-2740`,
+     `index.html:2887-2903`).
+  2. **Dashboard-sandhed:** "Sikret" beviser kun at et remote-navn findes,
+     "Pushet" bruger kun lokalt kendt upstream, STATUS-lampen ser kun på dato,
+     og "Grønne (færdige)" accepterer grå/ukendt (`chatoverblik.py:711-733`,
+     `chatoverblik.py:779-812`, `index.html:3217-3236`).
+  3. **Kollegadokumentation:** `README.md` er stadig en stub, INSTALL har
+     modstridende cloud-AI-tekst, og en frisk installation i en vilkårligt
+     navngivet projektrod er ikke verificeret end-to-end.
+
+**Genoptagelsesbevis før deling:** B1-browsertest består uden CSP-fejl → alle
+regressionstests består → disk-artefaktet genbygges fra manifestet og valideres
+direkte → uafhængig P0-gate siger GO → readiness-gaten ovenfor siger GO →
+Kristian laver manuel smoke-test. Først derefter må én kollega få ZIP-filen.
 
 ### Næsten færdig
 - ⏳ Mobile Preview backend virker — men netværks-isolation på Politiken-WiFi blokerer iPhone fra at nå Mac. Skal testes hjemme på privat WiFi.
@@ -250,13 +340,26 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 ## Næste skridt
 
+**Ved genoptagelse — følg rækkefølgen og hold hvert trin afgrænset:**
+
+1. Fix kun blocker B1: konvertér de tre inline-`onclick` til
+   `addEventListener`/delegering.
+2. Browser-smoke-test under den faktiske CSP: projektknapper folder ikke
+   gruppen, kopiér-sti virker, og konsollen har ingen CSP-fejl.
+3. Kør regressionstests, genbyg ZIP, og udvid release-checket til også at
+   validere det faktiske disk-artefakt.
+4. Kør en ny uafhængig read-only P0-gate.
+5. Kør derefter den separate colleague-readiness-gate fra pause-checkpointet.
+
+**Øvrig backlog:**
+
 1. ✅ ~~Kristian tester det nye projekt-dashboard~~ — testet 2026-07-02, gav 3 runder feedback, alle rettet (se ovenfor). Dashboardet er i drift.
 2. ✅ ~~Test og merge PR 6~~ — merget. ~~Test 🚀 Genoptag~~ — verificeret 2026-06-10, virker.
 3. **Test mobile preview hjemme** på privat WiFi nu hvor preview-token + VPN-IP-fix er på plads
-4. **Distribuér Command Center til første kollega** via den nye current-pakke:
-   kør `python3 scripts/release_check.py --json`, byg med
-   `python3 scripts/build_release.py`, og del kun manifest-pakken — aldrig
-   `../Chatoverblik-dist` eller `../Chatoverblik-1.0.zip`.
+4. **Distribuér Command Center til første kollega — BLOKERET ved pausen.** Må
+   først ske efter hele beviskæden i pause-checkpointet. Del kun en nybygget,
+   direkte valideret manifest-pakke — aldrig `../Chatoverblik-dist` eller
+   `../Chatoverblik-1.0.zip`.
 5. **Vent på redaktør-feedback** på politiken-widget-services.md
 6. **Hvis grønt lys fra redaktør:** start migration af Cloudflare-konto + GitHub Organization
 7. **Bygge LESSONS.md-viewer** i Command Center så fixede bugs er let tilgængelige per projekt
@@ -286,6 +389,11 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 ## Kendte problemer
 
+- **B1 (åben, blocker for kollegapilot):** Ny CSP `script-src` uden `unsafe-inline`
+  slår 3 inline-`onclick` fra i `index.html` (linje 1590/1890/1897). Symptom:
+  klik på en projekt-header-knap folder hele gruppen sammen; 📋 Kopiér sti er død.
+  Prøvet: intet endnu — fundet i release-gate 2026-07-12. Fix: `onclick` →
+  `addEventListener` + browser-smoke-test under CSP.
 - **Mobile preview blokeres på Politikens WiFi** — formentlig client isolation på corporate netværk. Virker på private/home-netværk. Ikke en kode-fejl.
 - **Codex søgefelt understøtter ikke altid højreklik-paste** — VS Code/OpenAI-quirk. Workaround: ⌘V i stedet
 - **Cache for analysis.md eller HANDOVER.md kan blive forældet** hvis chats slettes/opdateres efter generering. Lav "↻ Genberegn"-knap som workaround
@@ -298,13 +406,21 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 - `chatoverblik.py` — Python-serveren, alle endpoints
 - `index.html` — single-page UI
+- `LESSONS.md` — projektets lærte lektier (læs ved sessions-start)
 - `cache.json` — AI-titler, user_title-overrides, pinned-state (genereres automatisk)
 - `analysis.md` — gemt workflow-analyse (genereres ved klik)
 - `start.command` — dobbeltklik-launcher
 - `icon.png` / `favicon.png` — Command Center-ikon serveret via /icon.png
 - `AppIcon.icns` — macOS-app-ikon
 - `~/Applications/Command Center.app` — min legacy launcher app (kan også bruges hvis Safari web app ikke er nok)
-- `Chatoverblik-dist/` + `Chatoverblik-1.0.zip` — distribution til kollega
+- `release/Chatoverblik-current.zip` — current-kandidat; **NO-GO ved pausen**
+  og skal genbygges efter B1
+- `release_manifest.json` + `scripts/build_release.py` +
+  `scripts/release_check.py` — release source-of-truth og gates
+- `../Chatoverblik-dist/` + `../Chatoverblik-1.0.zip` — **blokeret legacy;
+  må aldrig distribueres som current**
+- `P0_HARDENING.md` + `tests/test_p0_hardening.py` — P0-beslutninger og
+  regressionstest
 - `ULTRA_REVIEW.md` — rapport fra multi-agent code review (2026-06-04), alle 15 fund + status
 - `dashboard-plan.md` — plan for projekt-dashboardet (lampe-logik, scope-regel, acceptkriterier, trinvis byggeplan)
 

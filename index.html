@@ -1758,6 +1758,10 @@ function filterAndSort() {
   if (state.search) {
     xs.sort((a, b) => (a._searchTier || 99) - (b._searchTier || 99));
   }
+  // Husk rækkefølgen FØR pin-løftet. Projektgrupperne sorteres efter denne
+  // (se renderGrid), så en gammel pinnet chat ikke trækker hele sit projekt
+  // op i toppen af projektlisten.
+  xs.forEach((s, i) => { s._order = i; });
   // Pin altid øverst — undtagen ved søgning, hvor tier-relevans bør vinde
   // (en pinnet meta-chat med kun body-match skal IKKE stå over den rigtige
   // projekt-chat man leder efter).
@@ -1869,7 +1873,18 @@ function renderGrid() {
       return state.projects.some(q => q !== info && q.cwd && q.cwd.startsWith(prefix));
     };
 
-    grid.innerHTML = [...groups.entries()].map(([proj, items]) => {
+    // Rækkefølgen af selve projektgrupperne følger den valgte sortering, målt
+    // på gruppens stærkeste chat FØR pin-løftet (`_order`). Uden dette bestemte
+    // insertion-order i Map'et rækkefølgen, og de tre projekter med en pinnet
+    // chat lå altid øverst — også når de ikke havde været rørt i ugevis.
+    const groupRank = new Map();
+    for (const [proj, items] of groups) {
+      groupRank.set(proj, Math.min(...items.map(s => s._order ?? Infinity)));
+    }
+    const orderedGroups = [...groups.entries()]
+      .sort((a, b) => groupRank.get(a[0]) - groupRank.get(b[0]));
+
+    grid.innerHTML = orderedGroups.map(([proj, items]) => {
       const info = projInfo.get(proj);
       const showUrls = info && !isParentProject(info);
       let urlsArr = showUrls ? (info.urls || []) : [];
