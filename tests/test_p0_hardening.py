@@ -1,5 +1,6 @@
 import email.message
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -117,6 +118,22 @@ class HardeningCase(unittest.TestCase):
         self.assertIn("script-src 'self' 'nonce-abc'", nonce_csp)
         self.assertIn("object-src 'none'", nonce_csp)
         self.assertIn("default-src 'none'", chatoverblik.API_CSP)
+
+    def test_no_inline_event_handlers_in_index(self):
+        """B1: `script-src` uden `unsafe-inline` dræber inline on*-attributter.
+
+        Den oprindelige CSP-test tjekkede kun CSP-teksten, ikke om appen kunne
+        køre under den — derfor overlevede tre inline `onclick` i index.html.
+        Dette er billig-guarden; browser-beviset ligger i
+        tests/test_b1_csp_browser.mjs.
+        """
+        index = (ROOT / "index.html").read_text(encoding="utf-8")
+        # Kun attributter inde i et HTML-tag — ikke on*-omtaler i JS/kommentarer
+        offenders = re.findall(r"<[a-zA-Z][^>]*?\son[a-z]+\s*=\s*[\"']", index, re.S)
+        self.assertEqual(
+            offenders, [],
+            "inline event-handler-attributter i index.html bliver blokeret af CSP: "
+            + ", ".join(o[-60:] for o in offenders))
 
 
 class ReleaseCheckCase(unittest.TestCase):

@@ -1587,11 +1587,15 @@ function setServerHealth(state) {
         igen automatisk inden for få sekunder.
         <div class="app-path-row">
           <code class="app-path">__APP_DIR__</code>
-          <button class="app-path-copy" onclick="copyAppPath(this)">📋 Kopiér sti</button>
+          <button class="app-path-copy">📋 Kopiér sti</button>
         </div>
         <span class="app-path-hint">Åbn Finder → tryk ⌘⇧G → indsæt stien for at hoppe direkte til mappen.</span>
       </div>`;
   }
+  // CSP: ingen inline onclick — knappen wires efter hver innerHTML-opdatering
+  el.querySelectorAll(".app-path-copy").forEach(btn => {
+    btn.addEventListener("click", () => copyAppPath(btn));
+  });
 }
 
 async function copyAppPath(btn) {
@@ -1901,15 +1905,14 @@ function renderGrid() {
       const extraCount = Math.max(0, urlsArr.length - maxChips);
       const urls = urlsArr.slice(0, maxChips).map(u => `
         <a class="url-chip ${u.kind}" href="${escapeHTML(u.url)}" target="_blank"
-           rel="noopener" title="${escapeHTML(u.url)}"
-           onclick="event.stopPropagation();">
+           rel="noopener" title="${escapeHTML(u.url)}">
           ${u.kind === "live" ? "↗ Live" : "GitHub"}
         </a>`).join("") + (extraCount > 0
           ? `<span class="url-chip-more" title="${urlsArr.slice(maxChips).map(u => u.url).join('\n')}">+${extraCount}</span>`
           : "");
       const cwd = items[0]?.cwd || "";
       const projActions = cwd ? `
-        <span class="proj-header-actions" onclick="event.stopPropagation();">
+        <span class="proj-header-actions">
           <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Guide til projektets status og indhold">📖 Projektguide</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="browse-files" data-project="${escapeHTML(proj)}" title="Browse filer i Command Center">📄 Filer</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="mobile-preview" data-project="${escapeHTML(proj)}" title="Mobile preview med QR">📱 Preview</button>
@@ -1991,6 +1994,12 @@ function renderGrid() {
         toast("Fejl: " + (d.error || ""));
       }
     });
+  });
+
+  // CSP: erstatter de tidligere inline onclick="event.stopPropagation()" på
+  // url-chips og handlings-baren, så klik dér ikke folder projektgruppen
+  grid.querySelectorAll("a.url-chip, .proj-header-actions").forEach(el => {
+    el.addEventListener("click", (e) => e.stopPropagation());
   });
 
   grid.querySelectorAll(".proj-header-actions button").forEach(btn => {

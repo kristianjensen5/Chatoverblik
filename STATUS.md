@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-21 (sorteringsfejl i projektlisten rettet og verificeret. Projektet er stadig pauset for distribution: P0-sikkerhedsgate er NO-GO pga. B1, og kollegapilot kræver desuden en separat readiness-gate, se pause-checkpoint.)
+**Senest opdateret:** 2026-07-29 (B1 lukket og browser-verificeret under den faktiske CSP; release-checket validerer nu disk-artefaktet og ZIP'en er genbygget. Tilbage før distribution: ny uafhængig P0-gate + colleague-readiness-gate. NB: GitHub-kontoen er suspenderet, så intet er pushet siden 21. juli — alt arbejde ligger kun lokalt.)
 
 ---
 
@@ -105,6 +105,40 @@ en uge) lå nr. 3. Samme symptom inde i en projektgruppe.
 - ✅ Logget i ny `LESSONS.md` + `context/05_lessons.md` (fælden er generel:
   insertion-order i en Map er ikke en sortering, det er et biprodukt).
 - ⚠️ **B1 er IKKE rørt** i denne session — den står fortsat åben, se nedenfor.
+
+### B1 lukket + release-check udvidet (2026-07-29)
+Blocker B1 er rettet og verificeret i en rigtig browser under den faktiske
+nonce-CSP — det bevis der manglede hele vejen igennem.
+
+- ✅ **Alle tre inline `onclick` er væk fra `index.html`** og erstattet af
+  `addEventListener`: 📋 Kopiér sti wires nu efter hver `setServerHealth()`-
+  render, og `stopPropagation` på url-chips + `.proj-header-actions` sker i en
+  delegeret listener i `renderGrid()`.
+- ⚠️ **Gaten overvurderede B1.** Baseline-testen FØR fixet viste at kun ét af
+  de tre påståede symptomer var ægte: 📋 Kopiér sti var reelt død, men
+  projekt-header-knapperne og url-chips foldede **ikke** gruppen — den
+  delegerede knap-handler kaldte allerede både `stopPropagation()` og
+  `preventDefault()`, og det er `preventDefault()` der stopper `<summary>`-
+  foldning. De to inline-attributter var altså død kode, der kun larmede i
+  konsollen. Logget i `LESSONS.md` + `context/05_lessons.md`.
+- ✅ **Verificeret (regel 14):** `tests/test_b1_csp_browser.mjs` (Playwright mod
+  den kørende server) — 3/5 før fixet, **5/5 efter**: header-knap folder ikke
+  gruppen og åbner Filer-modalen, url-chip folder ikke gruppen, 📋 Kopiér sti
+  lægger den rigtige sti i udklipsholderen, og konsollen er fri for
+  CSP-violations (2 før fixet).
+- ✅ **Proces-hullet er lukket permanent** med to guards: browsertesten ovenfor
+  + `test_no_inline_event_handlers_in_index` i `tests/test_p0_hardening.py`
+  (billig regex-guard, negativ-kontrolleret: den fejler faktisk hvis en inline
+  `onclick` genindføres).
+- ✅ **Release-checket validerer nu disk-artefaktet.** Nyt `check_disk_artifact()`
+  i `scripts/release_check.py` sammenligner hvert medlem i
+  `release/Chatoverblik-current.zip` byte for byte med kilderne. Kørt mod den
+  gamle zip FØRST: den fejlede korrekt med `disk artifact is stale`. ZIP'en er
+  genbygget fra manifestet; checket er nu OK.
+- ✅ Regressionstests: **9/9 OK** (`python3 -m unittest discover -s tests`),
+  `python3 -m py_compile chatoverblik.py` OK.
+- ⚠️ **Stadig ikke GO til distribution:** næste skridt er en ny uafhængig
+  read-only P0-gate og derefter colleague-readiness-gaten. Del intet endnu.
 
 ### P0-hardening baseline (2026-07-11)
 Fokuseret sikkerheds-sprint uden nye dashboard-/UX-features. Dokumenteret i
@@ -342,14 +376,21 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 **Ved genoptagelse — følg rækkefølgen og hold hvert trin afgrænset:**
 
-1. Fix kun blocker B1: konvertér de tre inline-`onclick` til
-   `addEventListener`/delegering.
-2. Browser-smoke-test under den faktiske CSP: projektknapper folder ikke
-   gruppen, kopiér-sti virker, og konsollen har ingen CSP-fejl.
-3. Kør regressionstests, genbyg ZIP, og udvid release-checket til også at
-   validere det faktiske disk-artefakt.
-4. Kør en ny uafhængig read-only P0-gate.
+1. ✅ ~~Fix blocker B1~~ — lukket 2026-07-29, se ovenfor.
+2. ✅ ~~Browser-smoke-test under den faktiske CSP~~ — 5/5, konsol ren.
+3. ✅ ~~Regressionstests, genbyg ZIP, udvid release-checket til disk-artefaktet~~
+   — 9/9 tests, ZIP genbygget, `check_disk_artifact()` tilføjet og bevist mod
+   den forældede pakke.
+4. **Kør en ny uafhængig read-only P0-gate** (dyb model, se `07_model_playbook.md`).
+   Bed den eksplicit om at afkræfte hvert fund med den billigste mulige test
+   før den kalder noget en blocker — det var netop dét, der manglede sidst.
 5. Kør derefter den separate colleague-readiness-gate fra pause-checkpointet.
+6. **Blokerende, uden for koden: GitHub-kontoen er suspenderet.** `git push`
+   svarer `403 — Your account is suspended`. Intet i hverken `Chatoverblik`
+   eller `Masterversioner` er pushet siden 21. juli, og med Time Machine
+   stadig ude af drift (regel 0 i `08_repo_politik.md`) findes arbejdet kun på
+   Mac'en. Kristian skal kontakte support.github.com. Indtil da: ingen
+   distribution, og overvej en midlertidig kopi på ekstern disk.
 
 **Øvrig backlog:**
 
@@ -389,11 +430,12 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 
 ## Kendte problemer
 
-- **B1 (åben, blocker for kollegapilot):** Ny CSP `script-src` uden `unsafe-inline`
-  slår 3 inline-`onclick` fra i `index.html` (linje 1590/1890/1897). Symptom:
-  klik på en projekt-header-knap folder hele gruppen sammen; 📋 Kopiér sti er død.
-  Prøvet: intet endnu — fundet i release-gate 2026-07-12. Fix: `onclick` →
-  `addEventListener` + browser-smoke-test under CSP.
+- ✅ **B1 — LUKKET 2026-07-29.** Alle tre inline-`onclick` konverteret til
+  `addEventListener` og verificeret i browser under den faktiske CSP (5/5,
+  konsol ren). To guards forhindrer tilbagefald. Se afsnittet ovenfor.
+- **GitHub-kontoen er suspenderet (blocker, uden for koden).** `git push` giver
+  `403 — Your account is suspended`. Begge repos står 1 commit foran remote og
+  er kun sikret lokalt. Handling: kontakt support.github.com.
 - **Mobile preview blokeres på Politikens WiFi** — formentlig client isolation på corporate netværk. Virker på private/home-netværk. Ikke en kode-fejl.
 - **Codex søgefelt understøtter ikke altid højreklik-paste** — VS Code/OpenAI-quirk. Workaround: ⌘V i stedet
 - **Cache for analysis.md eller HANDOVER.md kan blive forældet** hvis chats slettes/opdateres efter generering. Lav "↻ Genberegn"-knap som workaround
@@ -413,8 +455,12 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
 - `icon.png` / `favicon.png` — Command Center-ikon serveret via /icon.png
 - `AppIcon.icns` — macOS-app-ikon
 - `~/Applications/Command Center.app` — min legacy launcher app (kan også bruges hvis Safari web app ikke er nok)
-- `release/Chatoverblik-current.zip` — current-kandidat; **NO-GO ved pausen**
-  og skal genbygges efter B1
+- `release/Chatoverblik-current.zip` — current-kandidat; genbygget efter B1
+  (2026-07-29) og valideret direkte mod kilderne. Stadig ikke godkendt til
+  udlevering: mangler ny P0-gate + readiness-gate
+- `tests/test_b1_csp_browser.mjs` — Playwright-browsertest af den faktiske CSP
+  (kræver kørende server + `npx playwright install chromium`; dev-only, ikke
+  en del af release-pakken)
 - `release_manifest.json` + `scripts/build_release.py` +
   `scripts/release_check.py` — release source-of-truth og gates
 - `../Chatoverblik-dist/` + `../Chatoverblik-1.0.zip` — **blokeret legacy;

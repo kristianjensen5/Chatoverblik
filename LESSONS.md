@@ -47,6 +47,40 @@ sortering brugeren vælger (nyeste/ældste/oprettet) og uanset søge-tiers.
 
 ---
 
+## En kode-gate kan overvurdere en fejl lige så let som at overse den
+
+**Problem:** Release-gaten (2026-07-12) udpegede B1 med tre symptomer, alle
+læst ud af koden: 📋 Kopiér sti er død, OG hvert klik på en projekt-header-knap
+(📖/📄/📱/↗/📁) folder hele projektgruppen sammen, OG url-chips gør det samme.
+Projektet blev pauset i en uge på den vurdering. En browsertest under den
+faktiske CSP viste at kun det FØRSTE symptom var ægte.
+
+**Årsag:** CSP blokerer ganske rigtigt de tre inline `onclick`. Men de to af
+dem (`event.stopPropagation()` på url-chip og på `.proj-header-actions`) var
+allerede overflødige: den delegerede `addEventListener` på knapperne kalder
+selv både `stopPropagation()` OG `preventDefault()`
+([index.html:2003-2005](index.html#L2003-L2005)). Og det er `preventDefault()`
+— ikke `stopPropagation()` — der forhindrer `<summary>`-elementets
+foldnings-adfærd, fordi foldning er en *aktiverings-adfærd*, ikke en
+almindelig event-handler. Gaten læste "inline onclick bliver blokeret" og
+sluttede "altså går funktionen tabt", uden at spørge om noget andet allerede
+dækkede den.
+
+**Fix:** Alle tre attributter fjernet og erstattet af `addEventListener`. To
+guards, så hullet ikke kan genopstå:
+`tests/test_b1_csp_browser.mjs` (Playwright mod den kørende server under den
+rigtige CSP) og `test_no_inline_event_handlers_in_index` i
+`tests/test_p0_hardening.py` (billig regex-guard, negativ-kontrolleret).
+
+**Lektien:** en read-only gate leverer *hypoteser*, ikke fund. Kør den
+billigste test der kan afkræfte hver enkelt, FØR du planlægger efter dem —
+også når gaten er kørt af en dyb model. Her kostede det en uges pause på to
+symptomer der ikke fandtes.
+
+**Dato:** 2026-07-29
+
+---
+
 ## Verificér frontend-sortering mod ægte data — ikke mod kodelæsning
 
 **Problem:** Sorteringsfejlen ovenfor var usynlig ved at læse koden; hvert

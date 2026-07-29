@@ -92,6 +92,46 @@ def check_zip_bytes(zip_bytes, manifest):
     return errors
 
 
+def check_disk_artifact(root, manifest):
+    """Validér selve disk-artefaktet, ikke kun en nybygget zip i hukommelsen.
+
+    Fanger den forældede pakke: en zip bygget FØR en kildeændring består ellers
+    alle andre checks, fordi de kun ser på kilderne og på en frisk in-memory-zip.
+    """
+    errors = []
+    evidence = []
+    artifact = root / "release" / manifest["current_package"]
+    if not artifact.exists():
+        errors.append(f"disk artifact missing: release/{manifest['current_package']}"
+                      " (kør scripts/build_release.py)")
+        return errors, evidence
+
+    try:
+        zip_bytes = artifact.read_bytes()
+        errors.extend(check_zip_bytes(zip_bytes, manifest))
+    except zipfile.BadZipFile:
+        errors.append(f"disk artifact is not a readable zip: release/{manifest['current_package']}")
+        return errors, evidence
+
+    # Indhold skal matche de nuværende kilder byte for byte
+    stale = []
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        packed = {info.filename for info in zf.infolist() if not info.is_dir()}
+        for src, dst in iter_manifest_files(root, manifest):
+            name = dst.as_posix()
+            if name not in packed or not src.exists():
+                continue
+            if zf.read(name) != src.read_bytes():
+                stale.append(name)
+    if stale:
+        errors.append("disk artifact is stale (afviger fra kilderne): "
+                      + ", ".join(sorted(stale))
+                      + " — genbyg med scripts/build_release.py")
+    else:
+        evidence.append(f"disk artifact matches current sources: release/{manifest['current_package']}")
+    return errors, evidence
+
+
 def legacy_artifact_has_banned_patterns(path, manifest):
     banned = manifest["banned_text_patterns"]
     if path.is_dir():
@@ -142,6 +182,9 @@ def main():
     errors.extend(check_current_source(root, manifest))
     zip_bytes = build_release_bytes(root, manifest)
     errors.extend(check_zip_bytes(zip_bytes, manifest))
+    disk_errors, disk_evidence = check_disk_artifact(root, manifest)
+    errors.extend(disk_errors)
+    evidence.extend(disk_evidence)
     legacy_errors, legacy_evidence = check_legacy_artifacts(root, manifest)
     errors.extend(legacy_errors)
     evidence.extend(legacy_evidence)
