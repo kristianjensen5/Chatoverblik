@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-29 (Søgningen er forbedret efter `search-plan.md`: ord kan stå i vilkårlig rækkefølge, danske bøjnings-/accentformer matches, resultater rangeres, og chatrækker viser op til 3 uddrag med hop til stedet i hele chatten. Release-zip er genbygget og release-checket OK. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
+**Senest opdateret:** 2026-07-29 (Søgeplanen er bygget, verificeret og committet lokalt. Ingen aktuel kodeopgave er valgt til næste session; tilbage ligger kun ikke-aktuelle gates/backlog og den eksterne GitHub-suspendering. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
 
 ---
 
@@ -459,12 +459,9 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
    Mac'en. Kristian skal kontakte support.github.com. Indtil da: ingen
    distribution, og overvej en midlertidig kopi på ekstern disk.
 
-**Næste opgave (plan klar, ikke påbegyndt):** bedre søgning — se
-`search-plan.md`. Søgningen er ét eksakt tekstopslag, så `lukning github` giver
-0 træf mens `github lukning` giver 1. Fire trin: ord-for-ord, ordstamme,
-rangering, og uddrag der viser HVOR i chatten træffet er. Sidste trin er
-afgørende: Kristians kvitterings-samtale er 9 beskeder inde i en chat på 1055
-beskeder med et helt andet navn. Bygge-opgave — Sonnet eller Codex på `medium`.
+**Aktuel næste kodeopgave:** ingen valgt. Bedre søgning fra `search-plan.md`
+er bygget og verificeret 2026-07-29; se afsnittet "Bedre søgning med uddrag og
+hop til træf" ovenfor. Gates/backlog nedenfor er bevidst ikke aktuelle lige nu.
 
 **Øvrig backlog:**
 
