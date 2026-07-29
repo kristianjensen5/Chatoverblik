@@ -1063,14 +1063,37 @@ def search_term_stem(term):
 
 
 def text_matches_all_terms(text, terms):
+    return all(text_has_search_term(text, term) for term in terms)
+
+
+def text_has_search_term(text, term):
     words = re.findall(r"\w+", normalize_search_text(text))
-    return all(any(search_word_matches(word, term) for word in words) for term in terms)
+    return any(search_word_matches(word, term) for word in words)
 
 
 def search_word_matches(word, term):
     if len(term) >= 3:
         return word.startswith(term)
     return word == term
+
+
+def search_match_score(session, body, terms):
+    score = 0
+    hit_terms = 0
+    for term in terms:
+        term_score = 0
+        if text_has_search_term(session.get("title", ""), term):
+            term_score += 6
+        if text_has_search_term(session.get("project", ""), term):
+            term_score += 5
+        if text_has_search_term(session.get("summary", ""), term):
+            term_score += 4
+        if text_has_search_term(body, term):
+            term_score += 1
+        if term_score:
+            hit_terms += 1
+            score += term_score
+    return hit_terms, score
 
 
 def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
@@ -2166,6 +2189,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json({"matches": []})
                 return
             matches = []
+            sessions_by_key = {
+                f"{s['source']}:{s['id']}": s for s in STATE["sessions"]
+            }
             for key, body in STATE["search_index"].items():
                 if not text_matches_all_terms(body, terms):
                     continue
@@ -2180,7 +2206,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if end < len(body):
                     snippet = snippet + "…"
                 source, sess_id = key.split(":", 1)
-                matches.append({"source": source, "id": sess_id, "snippet": snippet})
+                hit_terms, score = search_match_score(sessions_by_key.get(key, {}), body, terms)
+                matches.append({
+                    "source": source, "id": sess_id, "snippet": snippet,
+                    "hit_terms": hit_terms, "score": score
+                })
+            matches.sort(key=lambda m: (-m["hit_terms"], -m["score"]))
             self._send_json({"matches": matches})
             return
         if self.path.startswith("/api/chat/"):

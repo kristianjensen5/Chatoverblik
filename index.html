@@ -1770,7 +1770,7 @@ function filterAndSort() {
     });
     // Tier-rangering: stærkeste match først, så svagere matches.
     // Inden for hver tier sorteres efter nyhed (default).
-    for (const s of xs) s._searchTier = searchTier(s, q);
+    for (const s of xs) s._searchTier = searchTier(s, terms);
   }
   switch (state.sort) {
     case "oldest":  xs.sort((a,b) => (a.started||"").localeCompare(b.started||"")); break;
@@ -1820,8 +1820,12 @@ function searchTermStem(term) {
 }
 
 function textMatchesAllTerms(text, terms) {
+  return terms.every(term => textHasSearchTerm(text, term));
+}
+
+function textHasSearchTerm(text, term) {
   const words = normalizeSearchText(text).match(/\p{L}+/gu) || [];
-  return terms.every(term => words.some(word => searchWordMatches(word, term)));
+  return words.some(word => searchWordMatches(word, term));
 }
 
 function searchWordMatches(word, term) {
@@ -1836,16 +1840,23 @@ function searchWordMatches(word, term) {
 // 4: første-besked indeholder q (du startede chatten på emnet)
 // 5: resumé indeholder q (AI'en nævnte det som vigtigt)
 // 6: kun body-match (emnet nævnt i forbifarten)
-function searchTier(s, q) {
-  const terms = searchTerms(q);
+function searchTier(s, terms) {
   if (!terms.length) return 6;
-  const p = normalizeSearchText(s.project || "");
-  if (p === q) return 1;
-  if (textMatchesAllTerms(s.project || "", terms)) return 2;
-  if (textMatchesAllTerms(s.title || "", terms)) return 3;
-  if (textMatchesAllTerms(s.first_user || "", terms)) return 4;
-  if (textMatchesAllTerms(s.summary || "", terms)) return 5;
-  return 6;
+  let score = 0;
+  let hitTerms = 0;
+  const bodyHit = !!state.bodyMatches[`${s.source}:${s.id}`];
+  for (const term of terms) {
+    let termScore = 0;
+    if (textHasSearchTerm(s.title || "", term)) termScore += 6;
+    if (textHasSearchTerm(s.project || "", term)) termScore += 5;
+    if (textHasSearchTerm(s.summary || "", term)) termScore += 4;
+    if (bodyHit) termScore += 1;
+    if (termScore) {
+      hitTerms += 1;
+      score += termScore;
+    }
+  }
+  return ((terms.length - hitTerms) * 10000) - score;
 }
 
 function renderGrid() {

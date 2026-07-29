@@ -211,6 +211,23 @@ class HardeningCase(unittest.TestCase):
             "Søgning på blå mapper.",
             chatoverblik.search_terms("soegning blaa")))
 
+    def test_search_ranking_uses_weighted_fields_and_hit_count_first(self):
+        terms = chatoverblik.search_terms("github lukning")
+        session = {
+            "title": "Investiger GitHub-lukning",
+            "project": "Chatoverblik",
+            "summary": "",
+        }
+        hit_terms, score = chatoverblik.search_match_score(
+            session, "body nævner github og lukket konto", terms)
+        self.assertEqual(hit_terms, 2)
+        self.assertEqual(score, 14)
+
+        one_term = {"title": "GitHub GitHub GitHub", "project": "", "summary": ""}
+        one_hit_terms, one_score = chatoverblik.search_match_score(one_term, "", terms)
+        self.assertGreater(hit_terms, one_hit_terms)
+        self.assertLess(one_score, score)
+
     def test_csp_is_strict_for_app_and_api(self):
         nonce_csp = chatoverblik.APP_CSP.format(nonce="abc")
         self.assertIn("script-src 'self' 'nonce-abc'", nonce_csp)
