@@ -1756,12 +1756,15 @@ function filterAndSort() {
   if (state.filter !== "all") xs = xs.filter(s => s.source === state.filter);
   if (state.search) {
     const q = state.search.toLowerCase();
+    const terms = searchTerms(q);
     xs = xs.filter(s => {
-      const inMeta =
-        (s.title || "").toLowerCase().includes(q) ||
-        (s.summary || "").toLowerCase().includes(q) ||
-        (s.project || "").toLowerCase().includes(q) ||
-        (s.first_user || "").toLowerCase().includes(q);
+      const meta = [
+        s.title || "",
+        s.summary || "",
+        s.project || "",
+        s.first_user || ""
+      ].join(" ").toLowerCase();
+      const inMeta = terms.every(term => meta.includes(term));
       const inBody = !!state.bodyMatches[`${s.source}:${s.id}`];
       return inMeta || inBody;
     });
@@ -1792,6 +1795,10 @@ function filterAndSort() {
   return xs;
 }
 
+function searchTerms(q) {
+  return (q || "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+}
+
 // Score en chat mod søge-q. Lavere = stærkere match.
 // 1: projektnavn matcher EKSAKT (du leder efter præcis dette projekt)
 // 2: projektnavn indeholder q (relateret projekt)
@@ -1800,12 +1807,14 @@ function filterAndSort() {
 // 5: resumé indeholder q (AI'en nævnte det som vigtigt)
 // 6: kun body-match (emnet nævnt i forbifarten)
 function searchTier(s, q) {
+  const terms = searchTerms(q);
+  if (!terms.length) return 6;
   const p = (s.project || "").toLowerCase();
   if (p === q) return 1;
-  if (p.includes(q)) return 2;
-  if ((s.title || "").toLowerCase().includes(q)) return 3;
-  if ((s.first_user || "").toLowerCase().includes(q)) return 4;
-  if ((s.summary || "").toLowerCase().includes(q)) return 5;
+  if (terms.every(term => p.includes(term))) return 2;
+  if (terms.every(term => (s.title || "").toLowerCase().includes(term))) return 3;
+  if (terms.every(term => (s.first_user || "").toLowerCase().includes(term))) return 4;
+  if (terms.every(term => (s.summary || "").toLowerCase().includes(term))) return 5;
   return 6;
 }
 

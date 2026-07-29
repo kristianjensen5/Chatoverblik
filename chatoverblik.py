@@ -1041,6 +1041,15 @@ def build_search_index(sessions):
     return index
 
 
+def search_terms(query):
+    return [t for t in re.split(r"\s+", query.lower().strip()) if t]
+
+
+def text_matches_all_terms(text, terms):
+    haystack = (text or "").lower()
+    return all(term in haystack for term in terms)
+
+
 def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
     # Initial fallback-titler så frontenden viser noget med det samme
     apply_cached_titles(sessions, cache, ext_labels)
@@ -2128,15 +2137,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path.startswith("/api/search"):
             from urllib.parse import urlparse, parse_qs
-            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].lower().strip()
-            if len(q) < 2:
+            q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+            terms = search_terms(q)
+            if len(q.strip()) < 2 or not terms:
                 self._send_json({"matches": []})
                 return
             matches = []
             for key, body in STATE["search_index"].items():
-                idx = body.find(q)
-                if idx == -1:
+                if not text_matches_all_terms(body, terms):
                     continue
+                idx = min(body.find(term) for term in terms if body.find(term) != -1)
                 # Snippet ~100 chars omkring fundet
                 start = max(0, idx - 40)
                 end = min(len(body), idx + 120)

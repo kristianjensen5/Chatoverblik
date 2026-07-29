@@ -188,6 +188,17 @@ class HardeningCase(unittest.TestCase):
         ]), encoding="utf-8")
         self.assertIsNone(chatoverblik.parse_codex_session_file(path))
 
+    def test_search_matches_all_terms_in_any_order(self):
+        body = "Samtalen handler om GitHub og senere om kontoens lukning."
+        self.assertEqual(chatoverblik.search_terms("github lukning"),
+                         ["github", "lukning"])
+        self.assertTrue(chatoverblik.text_matches_all_terms(
+            body, chatoverblik.search_terms("github lukning")))
+        self.assertTrue(chatoverblik.text_matches_all_terms(
+            body, chatoverblik.search_terms("lukning github")))
+        self.assertFalse(chatoverblik.text_matches_all_terms(
+            body, chatoverblik.search_terms("github onclick")))
+
     def test_csp_is_strict_for_app_and_api(self):
         nonce_csp = chatoverblik.APP_CSP.format(nonce="abc")
         self.assertIn("script-src 'self' 'nonce-abc'", nonce_csp)
