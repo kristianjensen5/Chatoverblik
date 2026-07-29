@@ -599,6 +599,15 @@
     background: #fff3b0; color: var(--ink);
     padding: 0 2px; font-style: normal;
   }
+  .chat .snippet-list { display: grid; gap: 5px; }
+  .chat .snippet-jump {
+    display: block; width: 100%; text-align: left;
+    border: 0; border-left: 2px solid var(--line-strong);
+    background: transparent; color: inherit;
+    padding: 0 0 0 8px; cursor: pointer;
+    font: inherit; font-style: inherit; line-height: inherit;
+  }
+  .chat .snippet-jump:hover { color: var(--ink); border-left-color: var(--accent); }
   .chat:hover { border-color: var(--accent); }
   .chat .badge {
     font-size: 11px;
@@ -1294,6 +1303,15 @@
   }
   .msg.user { border-left-color: var(--accent); }
   .msg.assistant { border-left-color: var(--muted); }
+  .msg.search-hit {
+    background: #fff9d8;
+    border-left-color: #d4a017;
+    padding-right: 10px;
+  }
+  .msg mark {
+    background: #fff3b0; color: var(--ink);
+    padding: 0 2px;
+  }
   .msg .role {
     font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.08em;
@@ -2020,7 +2038,9 @@ function renderGrid() {
       if (e.target.classList.contains("rename-btn")) return;
       if (e.target.classList.contains("pin-btn")) return;
       if (e.target.classList.contains("delete-btn")) return;
-      openChat(el.dataset.source, el.dataset.id);
+      const jump = e.target.closest(".snippet-jump");
+      const messageIndex = jump ? Number(jump.dataset.messageIndex || 0) : null;
+      openChat(el.dataset.source, el.dataset.id, messageIndex);
     });
   });
   grid.querySelectorAll(".rename-btn").forEach(btn => {
@@ -2132,7 +2152,7 @@ async function refreshBodyMatches() {
     const d = await r.json();
     const map = {};
     for (const m of (d.matches || [])) {
-      map[`${m.source}:${m.id}`] = m.snippet;
+      map[`${m.source}:${m.id}`] = m;
     }
     state.bodyMatches = map;
     renderGrid();
@@ -2170,14 +2190,29 @@ function chatRow(s) {
 function renderSnippet(s) {
   if (!state.search) return "";
   const key = `${s.source}:${s.id}`;
-  const snip = state.bodyMatches[key];
-  if (!snip) return "";
-  // Highlight søgeord i snippet
-  const q = state.search.trim();
-  if (!q) return `<div class="snippet">${escapeHTML(snip)}</div>`;
-  const safe = escapeHTML(snip);
-  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
-  return `<div class="snippet">${safe.replace(re, m => `<mark>${m}</mark>`)}</div>`;
+  const match = state.bodyMatches[key];
+  if (!match) return "";
+  const terms = searchTerms(state.search);
+  const snippets = (match.snippets && match.snippets.length)
+    ? match.snippets
+    : [{ text: match.snippet || "", message_index: 0 }];
+  const items = snippets.slice(0, 3).map(snip => `
+    <button class="snippet-jump" data-message-index="${Number(snip.message_index || 0)}">
+      ${highlightSearchText(snip.text || "", terms)}
+    </button>
+  `).join("");
+  return `<div class="snippet snippet-list">${items}</div>`;
+}
+
+function highlightSearchText(text, terms) {
+  if (!terms.length) return escapeHTML(text || "");
+  return (text || "").split(/(\p{L}+)/gu).map(part => {
+    if (!part) return "";
+    const norm = normalizeSearchText(part);
+    const hit = terms.some(term => searchWordMatches(norm, term));
+    const safe = escapeHTML(part);
+    return hit ? `<mark>${safe}</mark>` : safe;
+  }).join("");
 }
 
 async function inlineRename(source, id) {
@@ -2210,7 +2245,7 @@ async function saveRename(source, id, title) {
   }
 }
 
-async function openChat(source, id) {
+async function openChat(source, id, targetMessageIndex = null) {
   $("modal-body").innerHTML = '<div class="empty">Henter chat…</div>';
   openModal();
   try {
@@ -2220,22 +2255,23 @@ async function openChat(source, id) {
       $("modal-body").innerHTML = '<div class="empty">Kunne ikke hente chat.</div>';
       return;
     }
-    renderChatDetail(data.session, data.messages);
+    renderChatDetail(data.session, data.messages, targetMessageIndex);
   } catch (e) {
     $("modal-body").innerHTML = '<div class="empty">Fejl: ' + escapeHTML(e.message) + '</div>';
   }
 }
 
-function renderChatDetail(s, messages) {
+function renderChatDetail(s, messages, targetMessageIndex = null) {
   const title = s.title || "(uden titel)";
   const isClaude = s.source === "claude";
   const firstMsg = (s.first_user || "").split("\n")[0].slice(0, 200);
+  const searchTermsForModal = searchTerms(state.search);
 
 
-  const msgsHTML = messages.map(m => `
-    <div class="msg ${m.role}">
+  const msgsHTML = messages.map((m, i) => `
+    <div class="msg ${m.role} ${i === targetMessageIndex ? "search-hit" : ""}" data-message-index="${i}">
       <div class="role">${m.role === "user" ? "Du" : "AI"} · ${fmtDate(m.ts)}</div>
-      <div class="text">${escapeHTML(m.text)}</div>
+      <div class="text">${highlightSearchText(m.text, searchTermsForModal)}</div>
     </div>
   `).join("");
 
@@ -2305,13 +2341,19 @@ function renderChatDetail(s, messages) {
         </div>
       </div>
     </div>
-    <details>
+    <details id="full-chat-details" ${targetMessageIndex !== null ? "open" : ""}>
       <summary>Vis hele chatten (${messages.length} beskeder)</summary>
       <div class="messages">${msgsHTML || '<div class="empty">Ingen læselige beskeder fundet.</div>'}</div>
     </details>
   `;
 
   openModal();
+  if (targetMessageIndex !== null) {
+    setTimeout(() => {
+      const target = $("modal-body").querySelector(`.msg[data-message-index="${targetMessageIndex}"]`);
+      if (target) target.scrollIntoView({ block: "center" });
+    }, 0);
+  }
 
   $("modal-rename-btn").onclick = () => {
     const h2 = $("modal-title");

@@ -1096,6 +1096,60 @@ def search_match_score(session, body, terms):
     return hit_terms, score
 
 
+def first_search_word_position(text, terms):
+    for match in re.finditer(r"\w+", text or ""):
+        word = normalize_search_text(match.group(0))
+        if any(search_word_matches(word, term) for term in terms):
+            return match.start()
+    return -1
+
+
+def make_search_snippet(text, terms, before=80, after=180):
+    idx = first_search_word_position(text, terms)
+    if idx == -1:
+        idx = 0
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if not compact:
+        return ""
+    start = max(0, idx - before)
+    end = min(len(compact), idx + after)
+    snippet = compact[start:end].strip()
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(compact):
+        snippet = snippet + "…"
+    return snippet
+
+
+def search_snippets_for_session(session, terms, limit=3):
+    try:
+        messages = render_chat_for_view(session)
+    except Exception:
+        return []
+    hits = []
+    for i, msg in enumerate(messages):
+        text = msg.get("text", "")
+        if text_matches_all_terms(text, terms) or any(text_has_search_term(text, t) for t in terms):
+            pos = first_search_word_position(text, terms)
+            hits.append((i, pos, text))
+    if not hits:
+        return []
+    if len(hits) <= limit:
+        selected = hits
+    else:
+        selected = [hits[0], hits[len(hits) // 2], hits[-1]]
+    snippets = []
+    seen = set()
+    for msg_index, _pos, text in selected:
+        if msg_index in seen:
+            continue
+        seen.add(msg_index)
+        snippet = make_search_snippet(text, terms)
+        if snippet:
+            snippets.append({"text": snippet, "message_index": msg_index})
+    return snippets[:limit]
+
+
 def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
     # Initial fallback-titler så frontenden viser noget med det samme
     apply_cached_titles(sessions, cache, ext_labels)
@@ -2195,21 +2249,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for key, body in STATE["search_index"].items():
                 if not text_matches_all_terms(body, terms):
                     continue
-                idxs = [body.find(term) for term in terms if body.find(term) != -1]
-                idx = min(idxs) if idxs else 0
-                # Snippet ~100 chars omkring fundet
-                start = max(0, idx - 40)
-                end = min(len(body), idx + 120)
-                snippet = body[start:end].strip()
-                if start > 0:
-                    snippet = "…" + snippet
-                if end < len(body):
-                    snippet = snippet + "…"
                 source, sess_id = key.split(":", 1)
-                hit_terms, score = search_match_score(sessions_by_key.get(key, {}), body, terms)
+                session = sessions_by_key.get(key, {})
+                snippets = search_snippets_for_session(session, terms)
+                if snippets:
+                    snippet = snippets[0]["text"]
+                else:
+                    idxs = [body.find(term) for term in terms if body.find(term) != -1]
+                    idx = min(idxs) if idxs else 0
+                    start = max(0, idx - 40)
+                    end = min(len(body), idx + 120)
+                    snippet = body[start:end].strip()
+                    if start > 0:
+                        snippet = "…" + snippet
+                    if end < len(body):
+                        snippet = snippet + "…"
+                    snippets = [{"text": snippet, "message_index": 0}]
+                hit_terms, score = search_match_score(session, body, terms)
                 matches.append({
                     "source": source, "id": sess_id, "snippet": snippet,
-                    "hit_terms": hit_terms, "score": score
+                    "snippets": snippets, "hit_terms": hit_terms, "score": score
                 })
             matches.sort(key=lambda m: (-m["hit_terms"], -m["score"]))
             self._send_json({"matches": matches})

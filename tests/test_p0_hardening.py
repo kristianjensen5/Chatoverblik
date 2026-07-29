@@ -228,6 +228,28 @@ class HardeningCase(unittest.TestCase):
         self.assertGreater(hit_terms, one_hit_terms)
         self.assertLess(one_score, score)
 
+    def test_search_returns_up_to_three_spread_snippets_with_message_index(self):
+        path = self.root / "snippet-chat.jsonl"
+        rows = []
+        for i, text in enumerate([
+            "Første besked om kvitteringer for AI-services.",
+            "Mellemtekst uden søgetræf.",
+            "Anden passage nævner kvittering og abonnementer.",
+            "Mere mellemtekst.",
+            "Sidste passage samler alle kvitteringer igen.",
+        ]):
+            rows.append({
+                "timestamp": f"2026-07-29T10:0{i}:00Z",
+                "message": {"role": "user", "content": text},
+            })
+        path.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+        session = {"source": "claude", "file": str(path)}
+        snippets = chatoverblik.search_snippets_for_session(
+            session, chatoverblik.search_terms("kvitteringer"))
+        self.assertEqual(len(snippets), 3)
+        self.assertEqual([s["message_index"] for s in snippets], [0, 2, 4])
+        self.assertIn("kvitteringer", snippets[0]["text"])
+
     def test_csp_is_strict_for_app_and_api(self):
         nonce_csp = chatoverblik.APP_CSP.format(nonce="abc")
         self.assertIn("script-src 'self' 'nonce-abc'", nonce_csp)
