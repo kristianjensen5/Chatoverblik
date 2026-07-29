@@ -174,7 +174,8 @@ startet uden om Command Center. Det var det ikke.
   chats skifter titel eller tælling, Claude-siden helt uændret. Chat-tallet
   falder fra 184 til ca. 155.
 - ✅ Regressionstests: **14/14 OK** (5 nye siden 21. juli).
-- ⏳ **Afventer Kristians egen browser-bekræftelse** efter serverstart.
+- ✅ **Bekræftet efter Kristians genstart 2026-07-29:** 184 → **155 chats**,
+  0 røde cloud-AI-noter (var 26), 0 "stærkt tak"-dubletter (var 14).
 - **Bevidst ikke gjort:** de 29 forældede poster i `cache.json` ryddes ikke.
   De læses aldrig (chatten findes ikke længere), og en oprydningsrutine kunne
   ved en delvis scanning komme til at slette `user_title`/`pinned` for en chat
@@ -431,6 +432,13 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
    stadig ude af drift (regel 0 i `08_repo_politik.md`) findes arbejdet kun på
    Mac'en. Kristian skal kontakte support.github.com. Indtil da: ingen
    distribution, og overvej en midlertidig kopi på ekstern disk.
+
+**Næste opgave (plan klar, ikke påbegyndt):** bedre søgning — se
+`search-plan.md`. Søgningen er ét eksakt tekstopslag, så `lukning github` giver
+0 træf mens `github lukning` giver 1. Fire trin: ord-for-ord, ordstamme,
+rangering, og uddrag der viser HVOR i chatten træffet er. Sidste trin er
+afgørende: Kristians kvitterings-samtale er 9 beskeder inde i en chat på 1055
+beskeder med et helt andet navn. Bygge-opgave — Sonnet eller Codex på `medium`.
 
 **Øvrig backlog:**
 
