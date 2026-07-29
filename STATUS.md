@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-29 (B1 lukket og browser-verificeret under den faktiske CSP; release-checket validerer nu disk-artefaktet. Desuden: 29 spøgelses-chats fra Codex' interne dokumenter filtreret fra, og fastlåste "cloud-AI sprunget over"-noter rettet. Tilbage før distribution: ny uafhængig P0-gate + colleague-readiness-gate. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
+**Senest opdateret:** 2026-07-29 (Søgningen er forbedret efter `search-plan.md`: ord kan stå i vilkårlig rækkefølge, danske bøjnings-/accentformer matches, resultater rangeres, og chatrækker viser op til 3 uddrag med hop til stedet i hele chatten. Release-zip er genbygget og release-checket OK. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
 
 ---
 
@@ -105,6 +105,32 @@ en uge) lå nr. 3. Samme symptom inde i en projektgruppe.
 - ✅ Logget i ny `LESSONS.md` + `context/05_lessons.md` (fælden er generel:
   insertion-order i en Map er ikke en sortering, det er et biprodukt).
 - ⚠️ **B1 er IKKE rørt** i denne session — den står fortsat åben, se nedenfor.
+
+### Bedre søgning med uddrag og hop til træf (2026-07-29)
+Bygget efter `search-plan.md`, fire trin med lokal commit efter hvert trin.
+Ingen cloud-AI, ingen nye app-afhængigheder, ingen inline `onclick`, og
+projekt-/pin-sorteringen er bevaret.
+
+- ✅ **Søgeord deles op og kan stå i vilkårlig rækkefølge.** `github lukning`
+  og `lukning github` giver nu samme træf.
+- ✅ **Danske bøjnings-/accentformer matches uden eksterne biblioteker.**
+  `kvittering` og `kvitteringer` giver samme antal træf; `lukning` finder også
+  `lukket`; `å/aa`, `ø/oe`, `æ/ae` foldes.
+- ✅ **Søgning rangeres efter relevans.** Vægte: titel 6, projekt 5, resumé 4,
+  body 1, og antal ramte søgeord dominerer score. `github lukning` placerer
+  `Investiger GitHub-lukning` øverst med score 14.
+- ✅ **Body-træf viser op til 3 uddrag pr. chat.** Uddragene kommer fra de
+  faktiske beskeder og har `message_index`, så et klik åbner "Vis hele chatten",
+  scroller til beskeden og fremhæver søgetermerne.
+- ✅ **Kristians kvitterings-eksempel er dækket.** `kvitteringer` viser uddrag
+  fra `Opret AI-assistent workspace` under `Kristians mentor`, bl.a. passagen
+  "jeg har nu tilføjet 44 kvitteringer fra open ai..." inde i den lange chat.
+- ✅ **Verificeret:** efter-tal på kørende server: `github lukning` 53,
+  `lukning github` 53, `csp onclick` 7, `kvittering` 26 (156 chats inkl. den
+  aktive Codex-session). Lokal før/efter-simulation viste `lost 0` for alle
+  fire baseline-søgninger og mindst fem ekstra søgninger. Regression: 18/18
+  unittests OK, `py_compile` OK, CSP-browsertest 5/5 OK, release-check OK efter
+  genbygget `release/Chatoverblik-current.zip`.
 
 ### B1 lukket + release-check udvidet (2026-07-29)
 Blocker B1 er rettet og verificeret i en rigtig browser under den faktiske
