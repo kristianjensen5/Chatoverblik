@@ -3,7 +3,7 @@
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-29 (B1 lukket og browser-verificeret under den faktiske CSP; release-checket validerer nu disk-artefaktet og ZIP'en er genbygget. Tilbage før distribution: ny uafhængig P0-gate + colleague-readiness-gate. NB: GitHub-kontoen er suspenderet, så intet er pushet siden 21. juli — alt arbejde ligger kun lokalt.)
+**Senest opdateret:** 2026-07-29 (B1 lukket og browser-verificeret under den faktiske CSP; release-checket validerer nu disk-artefaktet. Desuden: 29 spøgelses-chats fra Codex' interne dokumenter filtreret fra, og fastlåste "cloud-AI sprunget over"-noter rettet. Tilbage før distribution: ny uafhængig P0-gate + colleague-readiness-gate. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
 
 ---
 
@@ -139,6 +139,46 @@ nonce-CSP — det bevis der manglede hele vejen igennem.
   `python3 -m py_compile chatoverblik.py` OK.
 - ⚠️ **Stadig ikke GO til distribution:** næste skridt er en ny uafhængig
   read-only P0-gate og derefter colleague-readiness-gaten. Del intet endnu.
+
+### Spøgelses-chats og fastlåste "cloud-AI sprunget over"-noter (2026-07-29)
+
+**A. Fravalg af cloud-AI blev gemt som om det var et svar.**
+- ✅ Noten `(Cloud-AI ikke sendt automatisk…)` blev skrevet ind i `cache.json`.
+  Da cachen tjekkes før alt andet, ville de ramte chats beholde noten for
+  evigt — også efter cloud-AI blev slået til. 26 chats var ramt.
+- ✅ **Fix:** fravalget cachet ikke længere; gamle poster renses ved
+  serverstart (`drop_cached_skip_notes()`), og kun `title`/`summary` fjernes —
+  `user_title`, `pinned` og `user_cwd` røres ikke. `enrich_with_ai()` bruger nu
+  "mangler AI-titel" i stedet for "mangler cache-post", så en pinnet eller
+  omdøbt chat også kan få titel senere.
+- ✅ Noten er neutral i UI'et i stedet for at ligne en fejl, og siger hvad man
+  skal gøre. **Default-deny er urørt** — ingen chat sendes uden aktivt klik.
+
+**B. 29 spøgelses-chats i oversigten.** Kristian meldte at mange chats havde
+fået samme navn (14 stk. hed `stærkt tak`) og gættede på at det skyldtes chats
+startet uden om Command Center. Det var det ikke.
+- ✅ **Root cause:** Codex skriver sit eget godkendelsesdokument ind i
+  rollout-filen som et almindeligt `user_message`. Det indlejrer hele
+  transskriptet fra en tidligere samtale, så titlen blev klippet ud af midten
+  af en fremmed samtale — og fælles transskripter gav identiske titler.
+  30 af 163 filer bar dokumentet; **29 af dem indeholdt ikke én eneste besked
+  Kristian selv havde skrevet.** Se `LESSONS.md`.
+- ✅ **Fix:** dokumentet genkendes i `_BOOTSTRAP_PREFIXES`; `clean_user_text()`
+  klipper kun efter `"My request for Codex:"` når beskeden faktisk åbner med en
+  kendt indpakning (`_IDE_WRAPPER_PREFIXES`); `response_item`-fallbacken tjekker
+  råteksten før oprensning.
+- ✅ **Sidegevinst (privatliv):** de ramte chats bar 80-90 KB fra et ANDET
+  projekt rundt i AI-titel-payloaden. Filteret lukker også det.
+- ✅ **Verificeret:** parseren kørt mod alle 163 Codex-filer og alle 32
+  Claude-filer før og efter. 29 forsvinder, 0 dukker uventet op, 0 overlevende
+  chats skifter titel eller tælling, Claude-siden helt uændret. Chat-tallet
+  falder fra 184 til ca. 155.
+- ✅ Regressionstests: **14/14 OK** (5 nye siden 21. juli).
+- ⏳ **Afventer Kristians egen browser-bekræftelse** efter serverstart.
+- **Bevidst ikke gjort:** de 29 forældede poster i `cache.json` ryddes ikke.
+  De læses aldrig (chatten findes ikke længere), og en oprydningsrutine kunne
+  ved en delvis scanning komme til at slette `user_title`/`pinned` for en chat
+  der bare var midlertidigt uskannet. Risikoen er større end gevinsten.
 
 ### P0-hardening baseline (2026-07-11)
 Fokuseret sikkerheds-sprint uden nye dashboard-/UX-features. Dokumenteret i

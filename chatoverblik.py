@@ -46,6 +46,14 @@ PROMPT_PREVIEW_CHARS = 3000      # hvor meget af chatten vi sender til AI
 MAX_PARALLEL_AI_CALLS = 8
 CLOUD_AI_AUTO_TITLES = os.environ.get("COMMAND_CENTER_AUTO_AI_TITLES") == "1"
 CLOUD_AI_PROJECT_ALLOW_FILE = ".command-center-cloud-ai-ok"
+# Vist når default-deny forhindrer et automatisk cloud-kald. Det er et fravalg,
+# ikke et resultat — derfor må det ALDRIG gemmes i cache.json (se
+# ai_title_and_summary). Gør vi det, får chatten aldrig en rigtig titel senere.
+CLOUD_AI_SKIPPED_NOTE = "Resumé ikke hentet — tryk ↻ Ny AI-titel for at sende denne chat til AI."
+# Tidligere formuleringer, så gamle cache-poster kan renses ved indlæsning
+CLOUD_AI_SKIPPED_LEGACY = (
+    "(Cloud-AI ikke sendt automatisk — kræver aktivt valg)",
+)
 PREVIEW_TOKEN_TTL = 60 * 60  # Preview-links udløber efter 1 time
 RESCAN_INTERVAL_SECONDS = 25
 REPO_STATUS_CACHE_SECONDS = 60  # /api/repo-status: on-demand, ikke på polling-stien
@@ -145,12 +153,31 @@ def call_anthropic(prompt, *, model=DEFAULT_MODEL, max_tokens=1000, timeout=60):
 
 
 # ───────── Cache for AI-titler ─────────
+def drop_cached_skip_notes(cache):
+    """Fjern gemte 'cloud-AI blev sprunget over'-noter fra cachen.
+
+    Ældre versioner gemte fravalget som om det var et AI-svar. Resultatet var
+    at chatten aldrig kunne få en rigtig titel senere. Vi fjerner kun de
+    AI-genererede felter — user_title, pinned og user_cwd røres ikke.
+    """
+    stale = (CLOUD_AI_SKIPPED_NOTE,) + CLOUD_AI_SKIPPED_LEGACY
+    cleaned = 0
+    for meta in cache.values():
+        if isinstance(meta, dict) and meta.get("summary") in stale:
+            meta.pop("title", None)
+            meta.pop("summary", None)
+            cleaned += 1
+    return cleaned
+
+
 def load_cache():
     if CACHE_FILE.exists():
         try:
-            return json.loads(CACHE_FILE.read_text())
+            cache = json.loads(CACHE_FILE.read_text())
         except Exception:
             return {}
+        drop_cached_skip_notes(cache)
+        return cache
     return {}
 
 
@@ -238,6 +265,24 @@ _SELF_CLOSE_RE = re.compile(
 _BOOTSTRAP_PREFIXES = (
     "# AGENTS.md", "# CLAUDE.md", "<permissions",
     "<collaboration_mode", "<environment_context",
+    # Codex' eget godkendelses-/vurderingsdokument. Det indlejrer hele
+    # transskriptet fra en tidligere samtale og skrives til rollout-filen som et
+    # "user_message" — men brugeren har ikke skrevet det. Uden dette filter
+    # bliver dokumentet læst som første brugerbesked, og alle sessioner der
+    # bærer det samme indlejrede transskript får identisk titel.
+    "The following is the Codex agent history",
+)
+
+# De eneste indpakninger hvor "My request for Codex:" markerer brugerens
+# egentlige tekst. Målt på 250 rollout-filer findes præcis disse tre former.
+# Ligger markøren i en besked der IKKE åbner sådan, stammer den fra et
+# indlejret transskript — og så må vi ikke klippe efter den.
+_IDE_WRAPPER_PREFIXES = (
+    "# Context from my IDE setup:",
+    "# Files mentioned by the user:",
+    "## My request for Codex:",
+    "## My request:",
+    "My request for Codex:",
 )
 
 
@@ -249,12 +294,16 @@ def clean_user_text(text):
     cleaned = _TAG_RE.sub("", text)
     cleaned = _SELF_CLOSE_RE.sub("", cleaned)
     # Windsurf-Codex pakker brugerinput ind i "Context from my IDE setup" —
-    # det rigtige input ligger efter "My request for Codex:"
-    for marker in ("## My request for Codex:", "## My request:", "My request for Codex:"):
-        idx = cleaned.find(marker)
-        if idx != -1:
-            cleaned = cleaned[idx + len(marker):]
-            break
+    # det rigtige input ligger efter "My request for Codex:". Klip KUN når
+    # beskeden faktisk ER sådan en indpakning; ellers kan markøren ligge begravet
+    # i et indlejret transskript, og vi ville hive et stykke af en helt anden
+    # samtale ud og præsentere det som brugerens besked.
+    if cleaned.lstrip().startswith(_IDE_WRAPPER_PREFIXES):
+        for marker in ("## My request for Codex:", "## My request:", "My request for Codex:"):
+            idx = cleaned.find(marker)
+            if idx != -1:
+                cleaned = cleaned[idx + len(marker):]
+                break
     # Trim tomme linjer
     lines = [ln for ln in cleaned.splitlines() if ln.strip()]
     return "\n".join(lines).strip()
@@ -363,6 +412,10 @@ def parse_codex_session_file(f):
                 p = m.get("payload", {})
                 if p.get("type") == "message" and p.get("role") == "user":
                     raw = extract_text_from_content(p.get("content", ""))
+                    # Tjek RÅteksten først — oprensningen fjerner netop det
+                    # kendetegn vi genkender interne dokumenter på.
+                    if is_bootstrap_message(raw):
+                        continue
                     cleaned = clean_user_text(raw)
                     if cleaned and not is_bootstrap_message(cleaned):
                         first_user_text = cleaned
@@ -901,11 +954,12 @@ def ai_title_and_summary(session, cache, *, manual=False):
 
     if not ANTHROPIC_KEY or (
             not manual and not project_allows_automatic_cloud_ai(session.get("cwd", ""))):
-        cache[cache_key] = {
+        # Bevidst IKKE cachet: et fravalg er ikke et svar. Cacher vi det, ville
+        # chatten beholde noten for evigt — også efter cloud-AI slås til.
+        return {
             "title": fallback_title(session["first_user"]),
-            "summary": "(Cloud-AI ikke sendt automatisk — kræver aktivt valg)",
+            "summary": CLOUD_AI_SKIPPED_NOTE,
         }
-        return cache[cache_key]
 
     prompt = build_title_payload(session)
 
@@ -991,7 +1045,10 @@ def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
     # Initial fallback-titler så frontenden viser noget med det samme
     apply_cached_titles(sessions, cache, ext_labels)
 
-    needed = [s for s in sessions if not cache.get(f"{s['source']}:{s['id']}")]
+    # "Mangler AI-titel" — ikke "mangler cache-post". En chat kan have en
+    # cache-post med pinned/user_title uden nogensinde at have fået en AI-titel.
+    needed = [s for s in sessions
+              if not (cache.get(f"{s['source']}:{s['id']}") or {}).get("title")]
     total = len(needed)
     if total == 0:
         if status_cb:
@@ -1006,11 +1063,17 @@ def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
         for fut in as_completed(futures):
             s = futures[fut]
             done += 1
-            # Opdatér denne session live
-            meta = cache.get(f"{s['source']}:{s['id']}", {})
-            if meta:
-                s["title"] = meta.get("title") or s["title"]
-                s["summary"] = meta.get("summary") or s["summary"]
+            # Opdatér denne session live. Læs resultatet fra future'en, ikke fra
+            # cachen — et sprunget-over cloud-kald cacher bevidst ingenting, men
+            # skal stadig kunne vise sin note.
+            try:
+                result = fut.result() or {}
+            except Exception:
+                result = {}
+            if result:
+                s["title"] = (s.get("user_title") or s.get("ext_label")
+                              or result.get("title") or s["title"])
+                s["summary"] = result.get("summary") or s["summary"]
             if done % 5 == 0 or done == total:
                 save_cache(cache)
             if status_cb:

@@ -47,6 +47,52 @@ sortering brugeren vælger (nyeste/ældste/oprettet) og uanset søge-tiers.
 
 ---
 
+## Et værktøjs egne interne dokumenter kan ligne brugerens beskeder i logfilen
+
+**Problem:** 14 chats i "Kristians mentor" hed alle `stærkt tak`, og flere
+projekter havde samme mønster. Det lignede et navngivningsproblem — måske
+udløst af at chatten var startet uden om Command Center.
+
+**Årsag:** Noget helt andet. Codex skriver sit eget godkendelsesdokument
+("The following is the Codex agent history whose request action you are
+assessing…") ind i rollout-filen som et almindeligt `event_msg` /
+`user_message`. Dokumentet er 80-90 KB og indlejrer hele transskriptet fra en
+tidligere samtale. `is_bootstrap_message()` kendte kun fem præfikser og
+genkendte det ikke, så det blev læst som brugerens første besked. Og
+`clean_user_text()` gjorde det værre: den klippede efter det FØRSTE
+`"My request for Codex:"` uanset hvor i teksten det lå — dybt inde i det
+indlejrede transskript — og hev dermed et stykke af en fremmed samtale ud som
+titel. Fordi de samme transskripter går igen, blev titlerne identiske.
+Målt: 30 af 163 rollout-filer bar dokumentet, og **29 af dem indeholdt ikke én
+eneste besked brugeren selv havde skrevet**. Det var ikke chats med dårlige
+navne — det var spøgelser der aldrig havde været samtaler.
+
+**Fix:** (1) Genkend dokumentet i `_BOOTSTRAP_PREFIXES`, så det hverken bliver
+titel eller tælles som brugerbesked — en fil uden brugerbeskeder falder så
+automatisk ud som "ikke en chat". (2) Klip kun efter `"My request for Codex:"`
+når beskeden faktisk ÅBNER med en kendt indpakning (`_IDE_WRAPPER_PREFIXES` —
+målt til præcis tre former på 250 filer). (3) Tjek råteksten for
+bootstrap-mønstre FØR oprensning i `response_item`-fallbacken; oprensningen
+fjerner netop det kendetegn vi genkender dokumentet på.
+
+**To generelle regler:** En logfil fra et AI-værktøj indeholder både det
+brugeren skrev og det værktøjet skrev til sig selv — antag aldrig at
+`role: user` betyder "et menneske skrev det". Og en markør må kun bruges til at
+klippe i tekst, når man har bekræftet at teksten ER af den form markøren hører
+til; ellers rammer man tilfældige forekomster i citeret eller indlejret indhold.
+
+**Sidegevinst:** de ramte chats sendte 80 KB fra et ANDET projekt med i
+AI-titel-payloaden. En mentor-chat bar indhold fra "Kvitteringer på AI
+services". Filteret lukker også det.
+
+**Verificering:** parseren kørt mod alle 163 rigtige Codex-filer og alle 32
+Claude-filer før og efter. Resultat: 29 forsvinder, 0 dukker uventet op, 0
+overlevende chats skifter titel eller tælling, Claude-siden helt uændret.
+
+**Dato:** 2026-07-29
+
+---
+
 ## En kode-gate kan overvurdere en fejl lige så let som at overse den
 
 **Problem:** Release-gaten (2026-07-12) udpegede B1 med tre symptomer, alle

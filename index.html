@@ -832,6 +832,16 @@
     line-height: 1.5;
     margin-bottom: 22px;
   }
+  /* Ikke et resumé, men en oplysning om at cloud-AI bevidst blev sprunget
+     over. Skal ikke se ud som en fejl — derfor neutral grå, ikke accent. */
+  .modal .summary.muted {
+    background: transparent;
+    border-left: 3px solid var(--line-strong);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 14px;
+    font-style: italic;
+  }
   .modal .find-reveal {
     margin-top: 14px;
     padding: 14px;
@@ -1451,6 +1461,13 @@ function escapeHTML(s) {
   return (s || "").replace(/[&<>"']/g, c => ({
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
+}
+
+// Er resuméet i virkeligheden en note om at cloud-AI blev sprunget over?
+// Så skal det vises neutralt, ikke som et resultat. Matcher både den nuværende
+// og den gamle formulering (serveren: CLOUD_AI_SKIPPED_NOTE).
+function isSkipNote(summary) {
+  return /Resumé ikke hentet|Cloud-AI ikke sendt automatisk/.test(summary || "");
 }
 
 function shortHost(url) {
@@ -2197,7 +2214,7 @@ function renderChatDetail(s, messages) {
     <div class="cwd-line">📁 ${escapeHTML(cwdShort || "(ingen mappe registreret)")}${hintInline}</div>
 
     <div class="section-label">Resumé</div>
-    <div class="summary">${escapeHTML(s.summary || "(intet resume)")}</div>
+    <div class="summary${isSkipNote(s.summary) ? " muted" : ""}">${escapeHTML(s.summary || "(intet resume)")}</div>
 
     <div class="actions">
       <button class="primary" id="btn-find-chat">Find chatten i VS Code  →</button>
