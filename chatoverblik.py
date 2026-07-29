@@ -22,6 +22,7 @@ import secrets
 import subprocess
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1042,12 +1043,34 @@ def build_search_index(sessions):
 
 
 def search_terms(query):
-    return [t for t in re.split(r"\s+", query.lower().strip()) if t]
+    return [search_term_stem(t) for t in re.findall(r"\w+", normalize_search_text(query))]
+
+
+def normalize_search_text(text):
+    text = (text or "").lower().replace("æ", "ae").replace("ø", "oe").replace("å", "aa")
+    folded = unicodedata.normalize("NFKD", text)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return folded
+
+
+def search_term_stem(term):
+    if len(term) < 4:
+        return term
+    for suffix in ("inger", "ning", "ing", "erne", "ene", "ere", "ede", "et", "er", "en"):
+        if term.endswith(suffix) and len(term) - len(suffix) >= 3:
+            return term[:-len(suffix)]
+    return term
 
 
 def text_matches_all_terms(text, terms):
-    haystack = (text or "").lower()
-    return all(term in haystack for term in terms)
+    words = re.findall(r"\w+", normalize_search_text(text))
+    return all(any(search_word_matches(word, term) for word in words) for term in terms)
+
+
+def search_word_matches(word, term):
+    if len(term) >= 3:
+        return word.startswith(term)
+    return word == term
 
 
 def enrich_with_ai(sessions, cache, status_cb=None, ext_labels=None):
@@ -2146,7 +2169,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             for key, body in STATE["search_index"].items():
                 if not text_matches_all_terms(body, terms):
                     continue
-                idx = min(body.find(term) for term in terms if body.find(term) != -1)
+                idxs = [body.find(term) for term in terms if body.find(term) != -1]
+                idx = min(idxs) if idxs else 0
                 # Snippet ~100 chars omkring fundet
                 start = max(0, idx - 40)
                 end = min(len(body), idx + 120)

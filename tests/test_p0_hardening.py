@@ -191,13 +191,25 @@ class HardeningCase(unittest.TestCase):
     def test_search_matches_all_terms_in_any_order(self):
         body = "Samtalen handler om GitHub og senere om kontoens lukning."
         self.assertEqual(chatoverblik.search_terms("github lukning"),
-                         ["github", "lukning"])
+                         ["github", "luk"])
         self.assertTrue(chatoverblik.text_matches_all_terms(
             body, chatoverblik.search_terms("github lukning")))
         self.assertTrue(chatoverblik.text_matches_all_terms(
             body, chatoverblik.search_terms("lukning github")))
         self.assertFalse(chatoverblik.text_matches_all_terms(
             body, chatoverblik.search_terms("github onclick")))
+
+    def test_search_matches_simple_stems_and_folded_accents(self):
+        self.assertEqual(chatoverblik.search_terms("kvitteringer"), ["kvitter"])
+        self.assertTrue(chatoverblik.text_matches_all_terms(
+            "Alle kvitteringer for AI-services ligger her.",
+            chatoverblik.search_terms("kvittering")))
+        self.assertTrue(chatoverblik.text_matches_all_terms(
+            "GitHub-kontoen blev lukket.",
+            chatoverblik.search_terms("lukning github")))
+        self.assertTrue(chatoverblik.text_matches_all_terms(
+            "Søgning på blå mapper.",
+            chatoverblik.search_terms("soegning blaa")))
 
     def test_csp_is_strict_for_app_and_api(self):
         nonce_csp = chatoverblik.APP_CSP.format(nonce="abc")

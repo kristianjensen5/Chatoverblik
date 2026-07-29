@@ -1755,7 +1755,7 @@ function filterAndSort() {
   }
   if (state.filter !== "all") xs = xs.filter(s => s.source === state.filter);
   if (state.search) {
-    const q = state.search.toLowerCase();
+    const q = normalizeSearchText(state.search);
     const terms = searchTerms(q);
     xs = xs.filter(s => {
       const meta = [
@@ -1763,8 +1763,8 @@ function filterAndSort() {
         s.summary || "",
         s.project || "",
         s.first_user || ""
-      ].join(" ").toLowerCase();
-      const inMeta = terms.every(term => meta.includes(term));
+      ].join(" ");
+      const inMeta = textMatchesAllTerms(meta, terms);
       const inBody = !!state.bodyMatches[`${s.source}:${s.id}`];
       return inMeta || inBody;
     });
@@ -1796,7 +1796,37 @@ function filterAndSort() {
 }
 
 function searchTerms(q) {
-  return (q || "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+  return (normalizeSearchText(q).match(/\p{L}+/gu) || []).map(searchTermStem);
+}
+
+function normalizeSearchText(text) {
+  return (text || "")
+    .toLowerCase()
+    .replace(/æ/g, "ae")
+    .replace(/ø/g, "oe")
+    .replace(/å/g, "aa")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function searchTermStem(term) {
+  if (term.length < 4) return term;
+  for (const suffix of ["inger", "ning", "ing", "erne", "ene", "ere", "ede", "et", "er", "en"]) {
+    if (term.endsWith(suffix) && term.length - suffix.length >= 3) {
+      return term.slice(0, -suffix.length);
+    }
+  }
+  return term;
+}
+
+function textMatchesAllTerms(text, terms) {
+  const words = normalizeSearchText(text).match(/\p{L}+/gu) || [];
+  return terms.every(term => words.some(word => searchWordMatches(word, term)));
+}
+
+function searchWordMatches(word, term) {
+  if (term.length >= 3) return word.startsWith(term);
+  return word === term;
 }
 
 // Score en chat mod søge-q. Lavere = stærkere match.
@@ -1809,12 +1839,12 @@ function searchTerms(q) {
 function searchTier(s, q) {
   const terms = searchTerms(q);
   if (!terms.length) return 6;
-  const p = (s.project || "").toLowerCase();
+  const p = normalizeSearchText(s.project || "");
   if (p === q) return 1;
-  if (terms.every(term => p.includes(term))) return 2;
-  if (terms.every(term => (s.title || "").toLowerCase().includes(term))) return 3;
-  if (terms.every(term => (s.first_user || "").toLowerCase().includes(term))) return 4;
-  if (terms.every(term => (s.summary || "").toLowerCase().includes(term))) return 5;
+  if (textMatchesAllTerms(s.project || "", terms)) return 2;
+  if (textMatchesAllTerms(s.title || "", terms)) return 3;
+  if (textMatchesAllTerms(s.first_user || "", terms)) return 4;
+  if (textMatchesAllTerms(s.summary || "", terms)) return 5;
   return 6;
 }
 
