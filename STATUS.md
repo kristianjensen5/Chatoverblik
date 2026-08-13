@@ -501,6 +501,19 @@ hop til træf" ovenfor. Gates/backlog nedenfor er bevidst ikke aktuelle lige nu.
 
 ## Kendte problemer
 
+- ✅ **Cloud-AI-bekræftelsen — LUKKET 2026-08-13.** Symptom: *"Cloud-AI kræver
+  aktivt valg… send igen med ai_confirmed=true"*, hvis dialogen stod åben over
+  ~25 sek. Årsag: `require_ai_confirmation` genberegnede payload ved andet
+  kald og sammenlignede hash, mens `rescan_loop` opdaterede
+  `STATE["sessions"]` hvert `RESCAN_INTERVAL_SECONDS` (=25) — så payloaden
+  ændrede sig under læsningen. Fix: payloads gemmes nu i
+  `_AI_PENDING_PAYLOADS` under `"<action>:<sha256>"` og sendes tilbage til
+  kaldestedet, så **præcis den tekst der blev godkendt, er den der sendes**
+  (før kunne tekst A godkendes og tekst B sendes). Godkendelsen er bundet til
+  sit endpoint og gælder én gang; TTL 15 min. Verificeret med fire tests:
+  409 ved første kald · godkendelse accepteres trods ændret payload og sender
+  den oprindelige · hash kan ikke genbruges · hash virker ikke på tværs af
+  endpoints. Alle seks kaldesteder opdateret til 4-tuple.
 - ✅ **B1 — LUKKET 2026-07-29.** Alle tre inline-`onclick` konverteret til
   `addEventListener` og verificeret i browser under den faktiske CSP (5/5,
   konsol ren). To guards forhindrer tilbagefald. Se afsnittet ovenfor.

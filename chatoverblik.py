@@ -912,12 +912,42 @@ def project_allows_automatic_cloud_ai(cwd):
     return marker.exists() and marker.is_file()
 
 
+# Payloads der er vist til godkendelse, men endnu ikke sendt.
+# Nøgle: "<action>:<sha256>" → (payload, oprettet-tidspunkt).
+_AI_PENDING_PAYLOADS = {}
+_AI_PENDING_TTL = 900  # 15 min
+
+
 def require_ai_confirmation(data, *, action, model, payload, sensitivity="normal"):
-    """Returnér (ok, response, status). Ingen cloud-AI sendes uden hash-match."""
+    """Returnér (ok, response, status, godkendt_payload).
+
+    Ved success er `godkendt_payload` præcis den tekst Kristian så og
+    godkendte — send ALTID den videre til modellen, ikke den `payload` der
+    blev bygget ved dette kald.
+
+    Hvorfor: payload bygges forfra ved hvert kald, og chat-indekset opdateres
+    af rescan_loop hvert RESCAN_INTERVAL_SECONDS. Stod dialogen åben lidt for
+    længe, ændrede payload sig, hashen matchede ikke, og godkendelsen blev
+    afvist (fundet 2026-08-13). Værre: uden denne cache ville en godkendelse
+    af tekst A kunne føre til at tekst B blev sendt.
+
+    Godkendelsen er bundet til `action` og gælder ÉN gang — den fjernes ved
+    brug, så en hash ikke kan genbruges til et andet endpoint eller et
+    gentaget kald.
+    """
+    nu = time.time()
+    for n, (_, t) in list(_AI_PENDING_PAYLOADS.items()):
+        if nu - t > _AI_PENDING_TTL:
+            del _AI_PENDING_PAYLOADS[n]
+
+    if data.get("ai_confirmed") is True:
+        noegle = f"{action}:{data.get('ai_payload_sha256')}"
+        traef = _AI_PENDING_PAYLOADS.pop(noegle, None)
+        if traef:
+            return True, None, None, traef[0]
+
     payload_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    if (data.get("ai_confirmed") is True
-            and data.get("ai_payload_sha256") == payload_hash):
-        return True, None, None
+    _AI_PENDING_PAYLOADS[f"{action}:{payload_hash}"] = (payload, nu)
     return False, {
         "ok": False,
         "requires_confirmation": True,
@@ -927,7 +957,7 @@ def require_ai_confirmation(data, *, action, model, payload, sensitivity="normal
         "sensitivity": sensitivity,
         "payload_sha256": payload_hash,
         "payload": payload,
-    }, 409
+    }, 409, None
 
 
 def build_title_payload(session):
@@ -1658,6 +1688,10 @@ def get_project_workspace_file(workspace_root, project_name, color):
     workspace_data = {
         "folders": [{"path": workspace_root}],
         "settings": {
+            # Peacock kan ikke vise workbench-farver med VS Codes eksperimentelle
+            # Modern UI. Sæt den eksplicit per workspace, så en global preview-
+            # indstilling ikke skjuler projektets farve.
+            "workbench.experimental.modernUI": False,
             "peacock.color": color,
             "workbench.colorCustomizations": color_customizations(color),
             # Skip Welcome-fanen så chat-kommandoen kan tage fokus uden konflikt
@@ -2424,16 +2458,73 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "seneste_aktivitet": (p.get("latest", "") or "")[:10],
                 })
 
-            prompt = f"""Du er en ærlig, dygtig konsulent der analyserer en vibe-coders \
-workflow. Brugeren er Kristian Jensen — digital journalist på Politiken (Danmarks \
-største avis), baggrund i motion design og After Effects. Han bygger interaktive \
-widgets, spil og explainers til politiken.dk. Han skriver ikke kode selv — han \
-\"vibe-coder\" via AI-assistenter (Claude Code og Codex i VS Code/Windsurf).
+            prompt = f"""Du er en ærlig, dygtig konsulent der analyserer en vibe-coders workflow.
 
-VIGTIG VÆGTNING: Chats er sorteret med NYESTE FØRST. Hvert chat har et "dage_siden"-felt. \
-Kristian har lært meget undervejs — derfor vægter du nyere chats højere end gamle, fordi \
-de afspejler hans nuværende kompetenceniveau. Gamle chats (>120 dage) bruges primært til \
-at vise UDVIKLING og hvad han er blevet bedre til, ikke som kritik af hans nuværende niveau.
+Brugeren er Kristian Jensen — digital journalist på Politiken (Danmarks
+største avis), baggrund i motion design og After Effects. Han bygger
+interaktive widgets, spil og explainers til politiken.dk. Han skriver ikke
+kode selv — han "vibe-coder" via AI-assistenter (Claude Code og Codex i
+VS Code/Windsurf).
+
+FORBUD
+Implementér intet. Foreslå ingen kodeændringer. Bedøm ikke teknisk kvalitet
+— kun arbejdsgang: hvordan opgaver åbnes, afgrænses, verificeres og lukkes.
+
+Din værdi ligger i det Kristian ikke selv kan se. Ros kun det der er
+usædvanligt godt — ikke det der bare fungerer.
+
+Stil ingen opklarende spørgsmål. Dette er ét kald; du får ikke et svar
+tilbage. Lever færdigt på det du har.
+
+VÆGTNING
+Chats er sorteret med NYESTE FØRST. Hvert chat har et "dage_siden"-felt.
+Kristian har lært meget undervejs, så nye chats afspejler hans nuværende
+niveau. Brug disse bånd:
+
+  0-30 dage:    nuværende niveau. Kritik herfra er gyldig og handlingsbar.
+  31-120 dage:  kontekst og retning. Bruges til at afgøre om et mønster er
+                nyt eller vedvarende — ikke som selvstændig kritik.
+  >120 dage:    KUN til at vise udvikling og hvad han er blevet bedre til.
+                Må aldrig bruges som kritik af hans nuværende niveau.
+
+KATEGORISERING — gør dette for hvert eneste fund
+Chatdata viser hvad Kristian GJORDE, ikke hvad han undlod. En vane der
+fungerer perfekt er lige så usynlig i data som en vane der er død. Skeln
+derfor eksplicit, og angiv kategori ved hvert fund:
+
+  A. Skete konsekvent, uden at nogen nævnte det  → virker, indarbejdet
+  B. Skete kun når det blev nævnt eksplicit      → skrøbelig, holdes manuelt i live
+  C. Situationen opstod, men adfærden udeblev    → brudt
+  D. Situationen opstod aldrig i perioden        → kan ikke vurderes
+
+Kategori D er IKKE et negativt fund. Sjældne situationer (sikkerhedsreview
+af læserdata, prisundersøgelse af en ny ekstern service) kan være kritiske
+selvom de er usynlige i data. Foreslå aldrig at afskaffe noget på grundlag
+af D. Sig i stedet at det ikke kunne måles.
+
+BEVISKRAV
+Hvert fund skal bære en kvittering: chat-titel + dage_siden. Påstande uden
+kilde er gratis og tæller ikke.
+
+Bygger du på et resumé af en chat frem for dens faktiske indhold, så skriv
+det ved fundet. Fortolkninger arver hinandens fejl — rådata gør ikke.
+
+DATAENS GRÆNSER
+Du får ikke chatforløbene. Per chat har du: titel, de første 600 tegn af
+min åbningsbesked, et 400-tegns AI-resumé, antal beskeder, og alder i dage.
+
+Det betyder du kan vurdere hvordan jeg ÅBNER og hvor projekter LANDER
+(live URL, repo, aktivitet) — men næsten intet om hvad der skete undervejs.
+
+Konklusioner om chatforløb er derfor formodninger. Markér dem som sådan,
+eller lad være med at drage dem.
+
+USIKKERHEDSVENTIL
+Har du ikke data nok til et punkt, så sig det og gå videre. Udfyld ikke
+hullet med et kvalificeret gæt. Et ærligt "kan ikke vurderes" er mere værd
+end et plausibelt mønster jeg ikke kan efterprøve.
+
+---
 
 Her er data fra hans {len(chats_summary)} chats fordelt på {len(projects_summary)} projekter:
 
@@ -2443,31 +2534,36 @@ PROJEKTER:
 CHATS (nyeste først):
 {json.dumps(chats_summary, indent=2, ensure_ascii=False)}
 
-Lav en konkret, ærlig analyse i 5 sektioner. Brug markdown. Vær specifik med eksempler/citater \
-(citér korte uddrag i kursiv). Skriv på dansk. Pak ikke kritik ind i bomuld — men vær respektfuld.
+---
 
-## 1. Mønstre i hvordan jeg formulerer projekter
-Hvad fungerer i hans nyere åbningsbeskeder? Er han blevet bedre over tid? \
-Hvor er han stadig vag eller savner info? Citér eksempler (markér gerne om eksemplet er nyt eller gammelt).
+LEVER PRÆCIS DETTE — nummereret, i denne rækkefølge. Brug markdown.
+Skriv på dansk, i almindeligt sprog. Jeg kan ikke kode — undgå
+kodetekniske forklaringer. Pak ikke kritik ind i bomuld, men vær respektfuld.
 
-## 2. Gentagende bugs og svage sider
-Hvilke tekniske emner/problemer dukker op igen og igen — også i de seneste chats? \
-Hvor bør han investere i at lære bedre? Skeln mellem "engang-problemer" og "stadig-aktuelle-problemer".
+## 1. Arbejdsgangens tilstand
+Maks 6 fund, vigtigst først. Hvert fund: kategori (A-D), kvittering
+(chat-titel + dage_siden), og den udløsende betingelse — sker det altid,
+eller kun under bestemte omstændigheder?
 
-## 3. Færdiggørelses-mønstre + tekniske valg
-Hvilke projekter går i mål (live URL) vs strander? Korrelation mellem dybde (beskeder) og succes? \
-Tekniske valg han gør igen og igen — over/underengineerer han nogle steder? \
-Er der ændringer i hans valg over tid?
+## 2. Én ting jeg bør holde op med
+Præcis én. Ikke en liste. Den tvungne prioritering er pointen.
 
-## 4. Hvad virker rigtig godt — ros og positive mønstre
-Hvad gør han særligt smart i de nyeste chats? Hvilke vaner bør han holde fast i? \
-Hvor er han stærkest? Hvilken læringskurve kan du se?
+## 3. Én ting jeg er blevet mærkbart bedre til
+Præcis én, dokumenteret med to chats der viser før og efter — den ene fra
+>120 dage, den anden fra 0-30 dage.
 
-## 5. Konkret to-do: 5-10 vaner at prøve i næste projekt
-Praktiske, handlingsbare anbefalinger der bygger på hvor han ER NU. Specifikke ting at prøve. \
-Ikke generiske råd. Hvis et råd kun gælder gamle vaner han allerede har fixet, så drop det.
+## 4. Det ingen regel dækker endnu
+Hvilke gentagne mønstre så du i data, som hverken en vane eller en
+nedskrevet regel adresserer? Maks 3. Det er her analysen er mest værd —
+det manglende er sværere at få øje på end det overflødige.
 
-Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværende niveau og trajectory."""
+## 5. Hvad denne analyse ikke kan afgøre
+Kort liste over det kun Kristian selv kan vurdere.
+
+SVARFORMAT
+Punkt 1, 2 og 4 skrives som diff:
+
+   HVAD SKER DER NU  →  HVAD BØR SKE I STEDET  →  HVAD DET KOSTER MIG AT LADE VÆRE"""
 
             if not ANTHROPIC_KEY:
                 self._send_json({"ok": False,
@@ -2475,7 +2571,7 @@ Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværend
                 return
 
             model_choice = pick_model(data.get("model"))
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="workflow-analysis", model=model_choice,
                 payload=prompt, sensitivity="chat-index"
             )
@@ -2483,8 +2579,11 @@ Afslut med en kort 2-linjers "samlet vurdering" der fokuserer på hans nuværend
                 self._send_json(response, status)
                 return
             try:
-                text = call_anthropic(prompt, model=model_choice,
-                                      max_tokens=4000, timeout=180)
+                # 8000 fordi prompten nu kræver kategorisering + kvittering ved
+                # hvert fund. Ved 4000 blev svaret stille afkortet — en dyb
+                # model bruger desuden extended thinking af samme budget.
+                text = call_anthropic(godkendt_payload, model=model_choice,
+                                      max_tokens=8000, timeout=180)
                 # Gem til disk for re-visning (metadata i kommentar-linje)
                 analysis_file = HERE / "analysis.md"
                 ts = time.strftime("%Y-%m-%d %H:%M")
@@ -2599,7 +2698,7 @@ eller chats hvis nævnt.
 Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
 
             model_choice = pick_model(data.get("model"))
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="project-handover", model=model_choice,
                 payload=prompt, sensitivity="project"
             )
@@ -2607,7 +2706,7 @@ Afslut med en lille "TL;DR i én linje" der opsummerer projektet."""
                 self._send_json(response, status)
                 return
             try:
-                text = call_anthropic(prompt, model=model_choice,
+                text = call_anthropic(godkendt_payload, model=model_choice,
                                       max_tokens=2500, timeout=120)
                 # Gem som HANDOVER.md i projektmappen
                 handover_file = proj_path / "HANDOVER.md"
@@ -2691,7 +2790,7 @@ Vær konkret, kort, ærlig. Skriv på dansk.
 En ting der overraskede dig i mønstrene"""
 
             model_choice = pick_model(data.get("model"))
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="weekly-retro", model=model_choice,
                 payload=prompt, sensitivity="chat-index"
             )
@@ -2699,7 +2798,7 @@ En ting der overraskede dig i mønstrene"""
                 self._send_json(response, status)
                 return
             try:
-                text = call_anthropic(prompt, model=model_choice,
+                text = call_anthropic(godkendt_payload, model=model_choice,
                                       max_tokens=2000, timeout=90)
                 ts = time.strftime("%Y-%m-%d %H:%M")
                 self._send_json({"ok": True, "markdown": text,
@@ -2784,11 +2883,23 @@ formulerer sine åbnings- OG lukke-beskeder til AI'er — ikke HVAD chats \
 handler om. Han er digital journalist på Politiken, vibe-coder, og leder \
 efter mønstre i sine egne formuleringer.
 
+FORBUD
+Implementér intet. Foreslå ingen kodeændringer. Bedøm ikke teknisk kvalitet
+og ikke projekternes indhold — kun hans formuleringer.
+
+Stil ingen opklarende spørgsmål. Dette er ét kald; du får ikke et svar
+tilbage. Lever færdigt på det du har.
+
 Du har her hans {len(chat_data)} chats fra sidste {days} dage. For hver \
 chat ser du første-besked (det HAN skrev som åbning), sidste-besked (det \
 HAN skrev før chatten lukkede), titlen, projektet, antal beskeder, dato \
 og et kort resumé. Når en chat kun havde én user-besked er min_sidste_besked \
 tom.
+
+Du har hans FAKTISKE ord her, ikke resuméer af dem. Brug dem: hvert fund
+skal bære et ordret citat. Alt i vinduet er nyere end {days} dage og
+afspejler derfor hans nuværende niveau — forklar ikke et mønster væk med
+at han er ved at lære det.
 
 DATA:
 {json.dumps(chat_data, indent=2, ensure_ascii=False)}
@@ -2805,21 +2916,32 @@ Par sidste besked i en chat med første besked i projektets NÆSTE chat \
 (sortér chats per projekt efter dato): sluttede chatten med en lukke-handling \
 (deploy, STATUS.md, verificering), og samlede næste åbning det op — eller \
 ebbede den ud, hvorefter næste chat startede med noget nyt? Citér de \
-tydeligste par.
+tydeligste par, maks 4.
+
+Placér lukke-vanen i én af fire kategorier og sig hvilken:
+  A. Skete konsekvent, uden at nogen bad om det   → virker, indarbejdet
+  B. Skete kun når Kristian selv nævnte det       → skrøbelig
+  C. Chatten sluttede midt i noget uden lukning   → brudt
+  D. For få par til at vurdere                    → sig det, gæt ikke
 
 ## 3. Definition of done
 Hvor mange åbninger siger hvornår opgaven er færdig, eller hvilket bevis \
 der kræves ("vi er færdige når...", "testet på mobil", "deployet")? Citér \
-de bedste og de mest åbne. Tjek mod gentagelses-signalet: genåbnes chats \
-med slutkriterium sjældnere end chats uden?
+de bedste og de mest åbne, maks 3 af hver. Tjek mod gentagelses-signalet: \
+genåbnes chats med slutkriterium sjældnere end chats uden? Kan du ikke \
+afgøre det med de data du har, så sig det i stedet for at antyde en tendens.
 
 ## 4. Constraints før features
 Nævner åbningen de bindende rammer (mobil/desktop, CMS-embed, scope-låst, \
-læserdata/sikkerhed), eller er den ren feature-bestilling? Citér eksempler \
-på begge.
+læserdata/sikkerhed), eller er den ren feature-bestilling? Maks 3 eksempler \
+på hver.
 
 ## 5. Én ting at ændre i morgen
-Én sætning til kopi-paste i næste åbnings-besked.
+Én sætning til kopi-paste i næste åbnings-besked. Præcis én — ikke en liste.
+
+## 6. Hvad denne analyse ikke kan afgøre
+Kort. Du ser kun første og sidste besked — ikke hvad der skete imellem. \
+Sig hvilke af dine fund der ville kræve det fulde chatforløb for at bekræfte.
 
 Begrænsninger:
 - Ingen kompliment-runde
@@ -2828,7 +2950,7 @@ Begrænsninger:
 """
 
             model_choice = pick_model(data.get("model"))
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="prompting-review", model=model_choice,
                 payload=prompt, sensitivity="chat"
             )
@@ -2840,7 +2962,7 @@ Begrænsninger:
                 # extended thinking — hvis budgettet er for lavt æder tankerækker
                 # alle tokens og text-blokken returnerer tom. 16000 giver
                 # plads til både thinking og det fulde markdown-output.
-                text = call_anthropic(prompt, model=model_choice,
+                text = call_anthropic(godkendt_payload, model=model_choice,
                                       max_tokens=16000, timeout=180)
                 if not text.strip():
                     self._send_json({"ok": False,
@@ -3035,7 +3157,7 @@ Begrænsninger:
                 self._send_json({"ok": False, "error": "ANTHROPIC_API_KEY mangler"}, 400)
                 return
             payload = build_title_payload(session)
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="regenerate-title", model=MODEL,
                 payload=payload, sensitivity="chat"
             )
@@ -3046,6 +3168,10 @@ Begrænsninger:
                 cache.pop(key, None)
             # AI-kald uden for locken (kan tage 5-30s) — ai_title_and_summary
             # tager selv locken når den merger ind i cachen.
+            # NB: godkendt_payload bruges ikke her, fordi ai_title_and_summary
+            # selv bygger sin prompt via build_title_payload(session). Den er
+            # næsten deterministisk (kun msg_count kan nå at ændre sig), så
+            # racen er teoretisk og konsekvensen en let forældet titel.
             result = ai_title_and_summary(session, cache, manual=True)
             with STATE_LOCK:
                 entry = cache.get(key) or {}
@@ -3132,7 +3258,7 @@ Spring sektionen over hvis der ingen er.
 CHAT-INDHOLD:
 {chat_text}"""
             model_choice = pick_model(data.get("model"))
-            ok, response, status = require_ai_confirmation(
+            ok, response, status, godkendt_payload = require_ai_confirmation(
                 data, action="resume-summary", model=model_choice,
                 payload=prompt, sensitivity="chat"
             )
@@ -3140,7 +3266,7 @@ CHAT-INDHOLD:
                 self._send_json(response, status)
                 return
             try:
-                text = call_anthropic(prompt, model=model_choice,
+                text = call_anthropic(godkendt_payload, model=model_choice,
                                       max_tokens=2000, timeout=90)
                 ts = time.strftime("%Y-%m-%d %H:%M")
                 self._send_json({
