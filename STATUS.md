@@ -157,8 +157,32 @@ Chats → Claude → ny samtale.
   `node --check` på hele UI-JavaScriptet, `py_compile`, og et realdata-tjek mod
   Kristians faktiske vinduer. Kristian bekræftede live at fejlene udeblev.
 - Plan: `aabne-projekt-plan.md`. Commit `38a2600`, pushet til `dev`.
-- ⚠️ **Ikke testet af Kristian endnu:** trin-numrene, den nye tooltip og at
-  "↗ VS Code" starter en tom chat. Åbningen selv ER bekræftet af ham.
+- ✅ **Kristian har testet hele kæden 2026-08-18 og bekræftet alle fire dele:**
+  tooltip'en, den tomme chat via "↗ VS Code" (Commander Keen 6), trin 1-3 i
+  genoptag-forløbet, og at briefet står klar i chatfeltet (Tingfinder) uden at
+  han skulle paste noget. Loggen viste **33 sekunders ventetid** på Keen 6 —
+  med den gamle kode ville kommandoen være fyret 32 sekunder for tidligt.
+- **Ikke en fejl, men værd at vide:** VS Code genskaber selv det layout du
+  forlod et projekt med — Codex-panel, Explorer, åbne filer. Den tomme chat
+  kommer altså oveni det, du havde åbent sidst. Vi har bevidst IKKE tvunget et
+  fast layout frem; det ville også smide layouts væk som Kristian gerne vil have.
+
+### "Resumé" betød to forskellige ting i UI'et (2026-08-18)
+Under testen ledte Kristian efter genoptag-briefet og landede på "↻ Ny AI-titel",
+fordi chat-vinduets felt hed **Resumé** og teksten dér pegede på netop den knap.
+To ting, ét ord.
+
+- ✅ Feltet hedder nu **Kort beskrivelse**, med en forklarende under-linje
+  ("den ene linje der vises i listen og bruges i søgning").
+- ✅ Begge knappers tooltips siger nu eksplicit, hvad de IKKE er:
+  "↻ Ny AI-titel … Har intet med Fortsæt i ny chat at gøre."
+- ✅ `CLOUD_AI_SKIPPED_NOTE` omformuleret tilsvarende. **Fælde undgået:**
+  `isSkipNote()` i frontend'en genkender noten med et regex, og noten gemmes i
+  `cache.json`. De gamle formuleringer er derfor BEVARET i regex'et, så
+  tidligere scannede chats stadig vises neutralt. (Målt: 0 chats i cachen bar
+  den gamle note, men mønstret koster intet og beskytter mod chats uden for
+  cachen.)
+- ✅ Søgefeltets placeholder siger nu "beskrivelser" i stedet for "resuméer".
 
 ### Bedre søgning med uddrag og hop til træf (2026-07-29)
 Bygget efter `search-plan.md`, fire trin med lokal commit efter hvert trin.

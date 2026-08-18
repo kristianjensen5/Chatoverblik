@@ -51,7 +51,8 @@ CLOUD_AI_PROJECT_ALLOW_FILE = ".command-center-cloud-ai-ok"
 # Vist når default-deny forhindrer et automatisk cloud-kald. Det er et fravalg,
 # ikke et resultat — derfor må det ALDRIG gemmes i cache.json (se
 # ai_title_and_summary). Gør vi det, får chatten aldrig en rigtig titel senere.
-CLOUD_AI_SKIPPED_NOTE = "Resumé ikke hentet — tryk ↻ Ny AI-titel for at sende denne chat til AI."
+CLOUD_AI_SKIPPED_NOTE = ("Ingen kort beskrivelse endnu — tryk ↻ Ny AI-titel for at sende "
+                         "denne chat til AI. (Ikke det samme som 🚀 Fortsæt i ny chat.)")
 # Tidligere formuleringer, så gamle cache-poster kan renses ved indlæsning
 CLOUD_AI_SKIPPED_LEGACY = (
     "(Cloud-AI ikke sendt automatisk — kræver aktivt valg)",

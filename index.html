@@ -1387,7 +1387,7 @@
 
   <main class="main">
     <div class="topbar">
-      <input id="search" type="search" placeholder="Søg i titler, projekter og resuméer…" autofocus>
+      <input id="search" type="search" placeholder="Søg i titler, projekter og beskrivelser…" autofocus>
       <select id="filter-source">
         <option value="all">Alle kilder</option>
         <option value="claude">Claude</option>
@@ -1485,7 +1485,7 @@ function escapeHTML(s) {
 // Så skal det vises neutralt, ikke som et resultat. Matcher både den nuværende
 // og den gamle formulering (serveren: CLOUD_AI_SKIPPED_NOTE).
 function isSkipNote(summary) {
-  return /Resumé ikke hentet|Cloud-AI ikke sendt automatisk/.test(summary || "");
+  return /Ingen kort beskrivelse endnu|Resumé ikke hentet|Cloud-AI ikke sendt automatisk/.test(summary || "");
 }
 
 function shortHost(url) {
@@ -2334,15 +2334,15 @@ function renderChatDetail(s, messages, targetMessageIndex = null) {
     </div>
     <div class="modal-title-row">
       <h2 id="modal-title">${escapeHTML(title)}</h2>
-      <button class="rename-btn" id="modal-resume-btn" title="Start ny chat med AI-genereret brief om denne chat">🚀 Fortsæt i ny chat</button>
+      <button class="rename-btn" id="modal-resume-btn" title="Åbner VS Code med en ny chat, hvor et brief om DENNE chat allerede står i feltet. Det er den, du skal bruge for at arbejde videre.">🚀 Fortsæt i ny chat</button>
       <button class="rename-btn" id="modal-move-btn" title="Flyt til andet projekt">📁 Flyt</button>
-      <button class="rename-btn" id="modal-regenerate-btn" title="Lav ny AI-titel + resumé">↻ Ny AI-titel</button>
+      <button class="rename-btn" id="modal-regenerate-btn" title="Giver chatten en ny AI-titel og en ny kort beskrivelse til listen. Har intet med “Fortsæt i ny chat” at gøre.">↻ Ny AI-titel</button>
       <button class="rename-btn" id="modal-rename-btn">✎ Omdøb</button>
     </div>
     <div class="cwd-line">📁 ${escapeHTML(cwdShort || "(ingen mappe registreret)")}${hintInline}</div>
 
-    <div class="section-label">Resumé</div>
-    <div class="summary${isSkipNote(s.summary) ? " muted" : ""}">${escapeHTML(s.summary || "(intet resume)")}</div>
+    <div class="section-label">Kort beskrivelse <span style="font-weight:400;text-transform:none;letter-spacing:0;opacity:.7;">— den ene linje der vises i listen og bruges i søgning</span></div>
+    <div class="summary${isSkipNote(s.summary) ? " muted" : ""}">${escapeHTML(s.summary || "(ingen kort beskrivelse endnu)")}</div>
 
     <div class="actions">
       <button class="primary" id="btn-find-chat">Find chatten i VS Code  →</button>
