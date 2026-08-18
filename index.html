@@ -1518,13 +1518,19 @@ async function mutationFetch(url, opts) {
   }
 }
 
-function requestAiPayloadApproval(payloadInfo) {
+// stepLabel sættes kun af flows der har en nummereret rækkefølge (genoptag-
+// guiden). Workflow-analyse, ugens retro og AI-titler bruger samme panel som
+// ét enkelt trin — dér ville "Trin 1 af 3" være volapyk, så de sender intet.
+function requestAiPayloadApproval(payloadInfo, stepLabel = "") {
   return new Promise((resolve) => {
     const host = $("modal-body");
     const panel = document.createElement("div");
     panel.style.cssText = "margin:12px 0;padding:12px;border:1px solid var(--line-strong);background:#fff;border-radius:6px;";
     panel.innerHTML = `
-      <div class="section-label" style="margin:0 0 6px;">Cloud-AI payload</div>
+      <div class="section-label" style="margin:0 0 6px;">${escapeHTML(stepLabel)}Godkend hvad der sendes til cloud-AI</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        Intet forlader din Mac, før du trykker “Send til cloud-AI”.
+      </div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
         Action: ${escapeHTML(payloadInfo.action || "")} · Model: ${escapeHTML(payloadInfo.model || "")} · Følsomhed: ${escapeHTML(payloadInfo.sensitivity || "")}
       </div>
@@ -1543,7 +1549,7 @@ function requestAiPayloadApproval(payloadInfo) {
   });
 }
 
-async function aiPost(url, payload) {
+async function aiPost(url, payload, stepLabel = "") {
   const first = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1552,7 +1558,7 @@ async function aiPost(url, payload) {
   let data = await first.json();
   if (!data.requires_confirmation) return { response: first, data };
 
-  const hash = await requestAiPayloadApproval(data);
+  const hash = await requestAiPayloadApproval(data, stepLabel);
   if (!hash) {
     return { response: first, data: { ok: false, error: "Annulleret før cloud-AI-send" } };
   }
@@ -1563,6 +1569,51 @@ async function aiPost(url, payload) {
   });
   data = await second.json();
   return { response: second, data };
+}
+
+// Fælles for "↗ VS Code"- og "📁 Finder"-knapperne, der findes BÅDE på
+// projekt-headeren i griddet og på projekt-status-kortene. De to steder havde
+// hver sin identiske kopi; nu kan de ikke drive fra hinanden.
+//
+// VS Code-grenen sender mode:"new-chat" uden prompt — altså en TOM chat. Det
+// er præcis forskellen på denne knap og genoptag-guidens, som sender briefet
+// med. Serveren venter på at Claude-udvidelsen melder sig klar i det nye
+// vindue (op til ~45 sek.), så knappen skal vise ventetiden frem for at lade
+// som om den er færdig.
+async function openProjectFromButton(btn, cwd, action) {
+  if (action !== "open-ws") {
+    const r = await fetch("/api/open-in-finder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd }),
+    });
+    const d = await r.json();
+    toast(d.ok ? "Åbner i Finder…" : "Fejl: " + (d.error || ""));
+    return;
+  }
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Åbner…";
+  try {
+    const r = await fetch("/api/open-in-windsurf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd, mode: "new-chat", source: "claude" }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      toast("Fejl: " + (d.error || ""));
+    } else if (d.ready === false) {
+      toast("VS Code er åbnet, men nåede ikke at blive klar — start chatten selv.");
+    } else {
+      toast("Åbnet i VS Code med en tom Claude-chat");
+    }
+  } catch (e) {
+    toast("Kunne ikke åbne VS Code: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
 }
 
 async function loadSessions() {
@@ -2001,7 +2052,7 @@ function renderGrid() {
           <button data-cwd="${escapeHTML(cwd)}" data-action="handover" data-project="${escapeHTML(proj)}" title="Guide til projektets status og indhold">📖 Projektguide</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="browse-files" data-project="${escapeHTML(proj)}" title="Browse filer i Command Center">📄 Filer</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="mobile-preview" data-project="${escapeHTML(proj)}" title="Mobile preview med QR">📱 Preview</button>
-          <button data-cwd="${escapeHTML(cwd)}" data-action="open-ws" title="Åbn i VS Code">↗ VS Code</button>
+          <button data-cwd="${escapeHTML(cwd)}" data-action="open-ws" title="Åbn projektet i VS Code med en tom Claude-chat klar">↗ VS Code</button>
           <button data-cwd="${escapeHTML(cwd)}" data-action="open-finder" title="Vis i Finder">📁 Finder</button>
         </span>` : "";
       const gid = "project:" + proj;
@@ -2107,16 +2158,7 @@ function renderGrid() {
         showFileBrowser(cwd, btn.dataset.project);
         return;
       }
-      const endpoint = action === "open-ws" ? "/api/open-in-windsurf" : "/api/open-in-finder";
-      const r = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
-      });
-      const d = await r.json();
-      toast(d.ok
-        ? (action === "open-ws" ? "Åbner i VS Code…" : "Åbner i Finder…")
-        : "Fejl: " + (d.error || ""));
+      await openProjectFromButton(btn, cwd, action);
     });
   });
 
@@ -2669,7 +2711,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
   const closeModalForResume = closeModal;
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🚀 Fortsæt i ny chat: ${escapeHTML(session.title || "(uden titel)")}</h2>
-    <div class="analysis-loading" id="resume-loading">Genererer brief (15-30s)…</div>
+    <div class="analysis-loading" id="resume-loading">Trin 2 af 3 · Genererer brief (15-30s)…</div>
     <div id="resume-result" style="display:none;"></div>`;
   $("modal-bg").classList.add("open");
   $("modal-body").querySelector(".close").onclick = closeModalForResume;
@@ -2677,7 +2719,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
   try {
     const { data: d } = await aiPost("/api/resume-summary", {
       source: session.source, id: session.id, model,
-    });
+    }, "Trin 1 af 3 · ");
     if (!d.ok) {
       $("resume-loading").innerHTML = `<div style="color:var(--accent);">Fejl: ${escapeHTML(d.error || "ukendt")}</div>`;
       return;
@@ -2693,7 +2735,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
           <button id="regen-resume">↻ Lav nyt brief</button>
         </span>
       </div>
-      <div class="section-label" style="margin-top:14px;">Genereret brief (kan redigeres)</div>
+      <div class="section-label" style="margin-top:14px;">Trin 3 af 3 · Læs briefet igennem, ret hvis du vil — og åbn så nedenfor</div>
       <textarea id="resume-brief" style="width:100%;min-height:280px;padding:12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;font-family:ui-monospace,Menlo,monospace;line-height:1.5;background:#f6f4ee;margin-bottom:14px;">${escapeHTML(d.summary)}</textarea>
 
       <div class="section-label">Din nye forespørgsel (valgfri)</div>
@@ -2705,7 +2747,7 @@ async function showResume(session, model = "claude-sonnet-4-6") {
         <button id="resume-copy-only" style="background:transparent;color:var(--ink);border:1px solid var(--line-strong);padding:10px 20px;font-weight:700;border-radius:4px;cursor:pointer;font:inherit;">📋 Kun kopier</button>
       </div>
       <div style="margin-top:14px;padding:10px 14px;background:#fff7e0;border-left:3px solid #d4a017;border-radius:0 4px 4px 0;font-size:12px;color:#8a6500;line-height:1.5;">
-        <strong>Sådan virker det:</strong> Knappen kopierer briefet + din forespørgsel til clipboard og åbner VS Code med Claude/Codex-sidebaren. Klik <strong>+</strong> for ny chat og paste med ⌘V. Den nye chat tagges automatisk under projektet ${escapeHTML(d.project)}.
+        <strong>Sådan virker det:</strong> Knappen åbner VS Code og skriver briefet direkte ind i Claude-chatten — du skal bare trykke Enter. Det kan tage op til et halvt minut, mens vinduet bliver klar. Briefet er også kopieret til udklipsholderen som sikkerhedsnet. (Codex kan ikke få teksten med automatisk — dér skal du paste med ⌘V.) Den nye chat tagges automatisk under projektet ${escapeHTML(d.project)}.
       </div>`;
     if (d.model) $("resume-model").value = d.model;
 
@@ -2719,23 +2761,40 @@ async function showResume(session, model = "claude-sonnet-4-6") {
     };
 
     async function launchIn(source) {
+      const prompt = buildPrompt();
       try {
-        await navigator.clipboard.writeText(buildPrompt());
+        await navigator.clipboard.writeText(prompt);
       } catch (e) {
         toast("Kunne ikke kopiere: " + e.message);
         return;
       }
+      const btn = source === "claude" ? $("resume-launch-claude") : $("resume-launch-codex");
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Åbner… venter på at VS Code er klar";
       try {
-        await fetch("/api/open-in-windsurf", {
+        const body = { source, cwd: d.cwd, mode: "new-chat" };
+        if (source === "claude") body.prompt = prompt;
+        const r = await fetch("/api/open-in-windsurf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source, cwd: d.cwd, mode: "new-chat" }),
+          body: JSON.stringify(body),
         });
+        const rd = await r.json();
+        if (rd.ready === false) {
+          toast("VS Code nåede ikke at blive klar. Vinduet er åbent — start chatten manuelt.");
+        } else if (rd.prompt_sent === false) {
+          toast(`Klar — chatten er åbnet i ${d.project}, paste med ⌘V`);
+        } else {
+          toast(`Klar — chatten er åbnet i ${d.project}`);
+        }
       } catch (e) {
         toast("Prompt kopieret, men kunne ikke åbne VS Code: " + e.message);
         return;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
       }
-      toast(`Prompt kopieret. Klik + i ${source === "claude" ? "Claude" : "Codex"}-sidebaren og paste med ⌘V`);
       closeModalForResume();
     }
 
@@ -3072,11 +3131,31 @@ Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævne
       };
       $("np-open").onclick = async () => {
         const chosenSource = document.querySelector("input[name='np-source']:checked")?.value || "claude";
-        await fetch("/api/open-in-windsurf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cwd: d.path, source: chosenSource, mode: "new-chat" }),
-        });
+        const btn = $("np-open");
+        const originalLabel = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Åbner… venter på at VS Code er klar";
+        try {
+          const r = await fetch("/api/open-in-windsurf", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cwd: d.path, source: chosenSource, mode: "new-chat", prompt: firstPrompt }),
+          });
+          const rd = await r.json();
+          if (rd.ready === false) {
+            toast("VS Code nåede ikke at blive klar. Vinduet er åbent — start chatten manuelt.");
+          } else if (rd.prompt_sent === false) {
+            toast(`Klar — chatten er åbnet i ${name}, paste med ⌘V`);
+          } else {
+            toast(`Klar — chatten er åbnet i ${name}`);
+          }
+        } catch (e) {
+          toast("Kunne ikke åbne VS Code: " + e.message);
+          return;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
         closeModal();
       };
     } else {
@@ -3428,18 +3507,7 @@ function renderDashboard() {
   });
   $("dashboard-result").querySelectorAll(".dashboard-card-actions button").forEach(btn => {
     btn.addEventListener("click", async () => {
-      const cwd = btn.dataset.cwd;
-      const action = btn.dataset.action;
-      const endpoint = action === "open-ws" ? "/api/open-in-windsurf" : "/api/open-in-finder";
-      const r = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cwd }),
-      });
-      const d = await r.json();
-      toast(d.ok
-        ? (action === "open-ws" ? "Åbner i VS Code…" : "Åbner i Finder…")
-        : "Fejl: " + (d.error || ""));
+      await openProjectFromButton(btn, btn.dataset.cwd, btn.dataset.action);
     });
   });
 }
@@ -3461,7 +3529,7 @@ function renderDashboardCard(f) {
         }).join("")}
       </div>
       <div class="dashboard-card-actions">
-        <button data-cwd="${escapeHTML(f.cwd)}" data-action="open-ws" title="Åbn projektet i VS Code med Claude klar">↗ VS Code</button>
+        <button data-cwd="${escapeHTML(f.cwd)}" data-action="open-ws" title="Åbn projektet i VS Code med en tom Claude-chat klar">↗ VS Code</button>
         <button data-cwd="${escapeHTML(f.cwd)}" data-action="open-finder" title="Vis mappen i Finder">📁 Finder</button>
       </div>
     </div>`;

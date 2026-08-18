@@ -24,6 +24,7 @@ import threading
 import time
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -1669,6 +1670,75 @@ def color_customizations(color):
 
 WORKSPACES_DIR = HERE / ".workspaces"
 
+IDE_LOCK_DIR = Path.home() / ".claude" / "ide"
+
+
+def _norm_path(p):
+    """macOS blander NFC og NFD i filnavne — 'drømmeverden' kan være kodet
+    på to måder der ser ens ud. Udvidelsen skriver NFC; normalisér begge
+    sider, ellers matcher danske mappenavne aldrig."""
+    try:
+        p = os.path.realpath(p)
+    except Exception:
+        pass
+    return unicodedata.normalize("NFC", str(p)).rstrip("/")
+
+
+def _pid_alive(pid):
+    """Kører processen stadig? Bruges til at kende en forældet lock-fil fra
+    en levende. Signal 0 dræber ikke — det spørger kun om processen findes."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True  # findes, men ejes af en anden bruger
+    except Exception:
+        return False
+
+
+def _ide_lock_workspaces(min_mtime=0.0, live_pid_only=False):
+    """Returnér mængden af projektmapper som Claude-udvidelsen p.t. er
+    kørende i.
+
+    Filtrene bruges til to FORSKELLIGE spørgsmål, og de må ikke byttes om:
+
+    - `min_mtime` = "kom der en NY klarmelding efter jeg startede vinduet".
+      Kun brugbar til at vente på en åbning vi selv lige har sat i gang.
+    - `live_pid_only` = "er projektet åbent LIGE NU". Lock-filens tidsstempel
+      dur ikke til det: udvidelsen skriver filen én gang ved opstart og rører
+      den aldrig igen, så et vindue der har stået åbent siden i går, har en
+      lock-fil fra i går. Til gengæld skriver den `pid`, og en lock-fil fra
+      et lukket eller kollapset VS Code peger på en død proces."""
+    found = set()
+    try:
+        entries = list(IDE_LOCK_DIR.glob("*.lock"))
+    except Exception:
+        return found
+    for f in entries:
+        try:
+            if f.stat().st_mtime < min_mtime:
+                continue
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if live_pid_only and not _pid_alive(data.get("pid")):
+            continue
+        for w in data.get("workspaceFolders") or []:
+            found.add(_norm_path(w))
+    return found
+
+
+def _wait_for_ide_ready(workspace_root, since_ts, timeout=45.0, interval=0.4):
+    """Vent til Claude-udvidelsen melder sig klar i netop dette projekts
+    vindue. Returnér ventetiden i sekunder, eller None ved timeout."""
+    target = _norm_path(workspace_root)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if target in _ide_lock_workspaces(min_mtime=since_ts - 2):
+            return round(time.time() - (deadline - timeout), 1)
+        time.sleep(interval)
+    return None
+
 
 def get_project_workspace_file(workspace_root, project_name, color):
     """Generér eller opdatér en .code-workspace fil per projekt.
@@ -2378,6 +2448,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ws_file = get_project_workspace_file(workspace_root, project_name, color)
 
             mode = data.get("mode", "")
+            since_ts = time.time()
+            already_open = _norm_path(workspace_root) in _ide_lock_workspaces(
+                live_pid_only=True)
             try:
                 code_cli = find_code_cli()
 
@@ -2394,27 +2467,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                  stdout=subprocess.DEVNULL)
 
                 extension_uri = None
+                prompt_sent = False
                 if mode == "new-chat":
                     if source == "claude":
                         extension_uri = CLAUDE_CODE_URI
+                        # Send første besked med i linket, så chatten åbner
+                        # med prompten allerede skrevet — kun Claude-URI'en
+                        # understøtter parameteren, Codex' gør ikke.
+                        prompt = data.get("prompt", "")
+                        if prompt and len(prompt) <= 8000:
+                            extension_uri = (CLAUDE_CODE_URI + "?prompt=" +
+                                              urllib.parse.quote(prompt, safe=""))
+                            prompt_sent = True
                     elif source == "codex":
                         extension_uri = CODEX_URI
 
                 # Aktivér KUN VS Code når vi bagefter skal fyre en extension-URI
-                # (new-chat). Ved almindelig åbning lader vi `code -n` selv tage
-                # fokus på det NYE vindue — ellers ville et øjeblikkeligt
-                # 'activate' rive et ANDET, allerede åbent vindue i front før det
-                # nye er oppe (du klikkede ét projekt, men endte i et andet).
+                # (new-chat). Vi venter på udvidelsens EGET klarsignal (en
+                # lock-fil på disken, se _wait_for_ide_ready) i stedet for et
+                # fast sleep — et fast sleep er ikke en garanti for at vinduet
+                # er klar, og en for tidlig 'activate' kan rive et ANDET,
+                # allerede åbent vindue i front (du klikkede ét projekt, men
+                # endte i et andet).
+                ready = None
+                waited = None
                 if extension_uri:
-                    time.sleep(0.8)
-                    logged_popen(["osascript", "-e",
-                                  'tell application "Visual Studio Code" to activate'])
-                    time.sleep(0.2)
-                    logged_popen(["open", extension_uri])
+                    if already_open:
+                        # Vinduet fandtes allerede — 'code -n' fokuserer det,
+                        # men der kommer INGEN ny lock-fil for det, så en poll
+                        # ville løbe tør for tid forgæves.
+                        time.sleep(1.5)
+                        ready = True
+                    else:
+                        waited = _wait_for_ide_ready(workspace_root, since_ts)
+                        ready = waited is not None
+
+                    if ready:
+                        logged_popen(["osascript", "-e",
+                                      'tell application "Visual Studio Code" to activate'])
+                        time.sleep(0.4)
+                        logged_popen(["open", extension_uri])
+                    # Ved timeout fyres INGENTING — bedre ingen chat end en
+                    # chat i det forkerte projekt.
 
                 self._send_json({"ok": True, "opened": workspace_root,
                                 "workspace_file": ws_file,
-                                "color": color, "project": project_name})
+                                "color": color, "project": project_name,
+                                "ready": ready, "waited": waited,
+                                "prompt_sent": prompt_sent})
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
