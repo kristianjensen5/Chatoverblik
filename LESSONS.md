@@ -5,6 +5,63 @@ Projekt-specifikke fælder. Globalt relevante lektier kopieres også til
 
 ---
 
+## Et fast `sleep` er ikke en synkronisering — find programmets eget klarsignal
+
+**Problem:** Ét klik på "åbn projekt" i Command Center gav tre fejl på én gang:
+en Claude-fane landede i et ANDET allerede åbent projekt, et tomt sort
+VS Code-vindue åbnede, og det rigtige farvede vindue kom uden chat. Det lignede
+tre uafhængige bugs.
+
+**Årsag:** Én fejl. `/api/open-in-windsurf` startede VS Code med `code -n` og
+ventede så et fast `time.sleep(0.8)` før den fyrede `vscode://`-URI'en, der
+åbner chatten. macOS sender sådan en URI til det vindue der er forrest netop
+dá. Efter ét sekund er det nye vindue ikke oppe — så kommandoen ramte det gamle
+projekt (fejl 1), eller ankom før noget vindue kunne tage imod den, hvorefter
+VS Code åbnede et tomt vindue for at håndtere den (fejl 2). Fejl 3 var bare
+følgen: chatten var landet et andet sted.
+
+**Bevis frem for gæt:** `logs/subprocess.log` har tidsstempler på hver kommando,
+og Claude-udvidelsen skriver en lock-fil til `~/.claude/ide/` når den er klar.
+Sammenholdt viste de, at URI'en var 2, 11, 20 og 23 sekunder for tidlig i fire
+af fire målte åbninger. Uden den sammenstilling ville "vinduet er nok klar efter
+0,8 sek." have lydt rimeligt.
+
+**Fix:** Vent på programmets EGET klarsignal i stedet for på uret:
+
+```python
+def _wait_for_ide_ready(workspace_root, since_ts, timeout=45.0, interval=0.4):
+    target = _norm_path(workspace_root)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if target in _ide_lock_workspaces(min_mtime=since_ts - 2):
+            return round(time.time() - (deadline - timeout), 1)
+        time.sleep(interval)
+    return None
+```
+
+Og — vigtigere end selve ventetiden — **fyr ingenting hvis signalet udebliver.**
+Den gamle kode fyrede altid; det var dét, der gjorde en timingfejl til en fane i
+det forkerte projekt. Ingen chat er et ærligt resultat, en chat i et fremmed
+projekt er ikke.
+
+**To fælder i selve signalet:**
+
+1. **Lock-filens alder svarer ikke på "er det åbent nu".** Udvidelsen skriver
+   filen én gang ved opstart og rører den aldrig igen, så et vindue der har
+   stået åbent siden i går, har en lock-fil fra i går. Første udkast brugte en
+   24-timers grænse og ville have ventet forgæves på præcis de vinduer, der var
+   åbne. Brug i stedet processens liv (`os.kill(pid, 0)`) — en lock-fil fra et
+   lukket VS Code peger på en død proces.
+2. **Danske mappenavne matcher ikke sig selv.** macOS blander NFC og NFD, så
+   `drømmeverden` kan være kodet på to måder, der ser ens ud på skærmen og er
+   forskellige strenge. Normalisér begge sider med
+   `unicodedata.normalize("NFC", …)` før sammenligning, ellers fejler netop de
+   projekter der har ø, æ eller å i navnet.
+
+**Dato:** 2026-08-18
+
+---
+
 ## En Map bygget fra en sorteret liste arver rækkefølgen fra det SIDSTE sorteringstrin
 
 **Problem:** Projektlisten på forsiden stod i forkert rækkefølge, selvom

@@ -1,9 +1,24 @@
 # Command Center (Chatoverblik) — Status
 
 **Type:** privat (workflow-værktøj, men bruges til arbejdsprojekter)
+**Tilstand:** aktiv
+**Data:** kildemateriale — indirekte, men reelt. Appen læser HELE chat-historikken
+fra `~/.claude/projects/` og `~/.codex/sessions/`, og de chats kan indeholde
+journalistisk kildemateriale. Intet af det ligger i repoet: `cache.json`,
+`analysis.md` og `logs/` er gitignorerede og verificeret utrackede. Men uddrag
+SENDES til Anthropic ved AI-titler, resumé, workflow-analyse og ugens retro —
+og taksonomiens række "Kilde-noter" i `08_repo_politik.md` siger *"kun lokale
+værktøjer, cloud-AI ikke"*. Modforanstaltningen er, at hvert eneste cloud-AI-kald
+kræver en eksplicit godkendelse, hvor den fulde payload vises på skærmen først
+(`require_ai_confirmation`, uden undtagelser). Åbn aldrig et endpoint der springer
+den over.
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-07-29 (Søgeplanen er bygget, verificeret og committet lokalt. Ingen aktuel kodeopgave er valgt til næste session; tilbage ligger kun ikke-aktuelle gates/backlog og den eksterne GitHub-suspendering. NB: GitHub-kontoen er suspenderet — intet er pushet siden 21. juli, alt ligger kun lokalt.)
+**Senest opdateret:** 2026-08-18 (Projekt-åbning fra Command Center rettet: ventede
+et fast sekund på VS Code og fyrede chat-kommandoen mod det forkerte vindue. Venter
+nu på udvidelsens ægte klarsignal, sender første besked med i linket, og
+genoptag-forløbet er nummereret. Committet og pushet — 38a2600. GitHub-spærren er
+ophævet, se nedenfor.)
 
 ---
 
@@ -105,6 +120,45 @@ en uge) lå nr. 3. Samme symptom inde i en projektgruppe.
 - ✅ Logget i ny `LESSONS.md` + `context/05_lessons.md` (fælden er generel:
   insertion-order i en Map er ikke en sortering, det er et biprodukt).
 - ⚠️ **B1 er IKKE rørt** i denne session — den står fortsat åben, se nedenfor.
+
+### Projekt-åbning venter nu på VS Codes ægte klarsignal (2026-08-18)
+Kristian meldte tre fejl ved ét klik på "åbn projekt": en Claude-fane landede i
+et ANDET allerede åbent projekt, et tomt sort VS Code-vindue åbnede, og det
+rigtige farvede vindue kom uden chat — han skulle stadig selv ind i
+Chats → Claude → ny samtale.
+
+- ✅ **Root cause, målt:** endpointet ventede et fast `time.sleep(0.8)` efter
+  `code -n` og fyrede så `vscode://`-URI'en. Sammenholdt `logs/subprocess.log`
+  med mtime på Claude-udvidelsens lock-filer i `~/.claude/ide/`: URI'en var
+  **2-23 sekunder for tidlig i 4 af 4 tilfælde**. Den gik derfor til det vindue
+  der tilfældigvis var forrest. Loggen havde oven i købet en `osascript`-fejl
+  `-609 Forbindelsen er ugyldig` — VS Code svarede ikke, fordi den stadig startede.
+- ✅ **Fix:** `_wait_for_ide_ready()` venter på udvidelsens eget klarsignal — en
+  lock-fil med projektets sti. Kommer det ikke inden for 45 sek., **fyres
+  INTET**. Bedre ingen chat end en chat i det forkerte projekt.
+- ✅ **"Er projektet allerede åbent" afgøres af processens liv, ikke filens
+  alder.** Udvidelsen skriver lock-filen én gang ved opstart og rører den aldrig
+  igen, så et vindue der har stået åbent siden i går, har en lock-fil fra i går.
+  Første udkast brugte en 24-timers mtime-grænse og ville have fejlet på præcis
+  det. Fanget i review før test.
+- ✅ **Første besked sendes med i linket** (`?prompt=`, verificeret i
+  udvidelsens `extension.js` → `createPanel(session, prompt)`). Chatten åbner
+  med teksten klar. Kun Claude — Codex' URI-format kan ikke bære den. Loft på
+  8000 tegn, clipboard beholdt som fallback.
+- ✅ **UI-rækkefølgen gjort synlig** efter Kristians spørgsmål "hvilken
+  rækkefølge skal jeg trykke i?": "↗ VS Code" starter nu også en tom Claude-chat
+  (hans valg), tooltip'en der påstod "med Claude klar" uden at starte en chat er
+  rettet begge steder, og genoptag-forløbet er nummereret Trin 1-3 af 3.
+  Numrene vises kun dér — godkendelses-panelet bruges også af analyse/retro/titler.
+- ✅ **De to identiske kopier af knap-logikken samlet** i
+  `openProjectFromButton()`. De lå på projekt-headeren og på dashboard-kortene.
+- ✅ **Verificeret:** 10 tests i `tests/test_ide_ready.py` (klarsignal for sent,
+  aldrig, forældet, dansk NFD/NFC-mappenavn, død/levende proces),
+  `node --check` på hele UI-JavaScriptet, `py_compile`, og et realdata-tjek mod
+  Kristians faktiske vinduer. Kristian bekræftede live at fejlene udeblev.
+- Plan: `aabne-projekt-plan.md`. Commit `38a2600`, pushet til `dev`.
+- ⚠️ **Ikke testet af Kristian endnu:** trin-numrene, den nye tooltip og at
+  "↗ VS Code" starter en tom chat. Åbningen selv ER bekræftet af ham.
 
 ### Bedre søgning med uddrag og hop til træf (2026-07-29)
 Bygget efter `search-plan.md`, fire trin med lokal commit efter hvert trin.
@@ -452,12 +506,13 @@ webview-chunks. Deep-link droppes bevidst: skrøbeligt gætteri for at spare
    Bed den eksplicit om at afkræfte hvert fund med den billigste mulige test
    før den kalder noget en blocker — det var netop dét, der manglede sidst.
 5. Kør derefter den separate colleague-readiness-gate fra pause-checkpointet.
-6. **Blokerende, uden for koden: GitHub-kontoen er suspenderet.** `git push`
-   svarer `403 — Your account is suspended`. Intet i hverken `Chatoverblik`
-   eller `Masterversioner` er pushet siden 21. juli, og med Time Machine
-   stadig ude af drift (regel 0 i `08_repo_politik.md`) findes arbejdet kun på
-   Mac'en. Kristian skal kontakte support.github.com. Indtil da: ingen
-   distribution, og overvej en midlertidig kopi på ekstern disk.
+6. ~~**Blokerende: GitHub-kontoen er suspenderet.**~~ **OPHÆVET — verificeret
+   2026-08-18.** `git push origin dev` gik igennem (`33b6c63..38a2600`), og
+   `git rev-list --count origin/dev..HEAD` viste 0 upushede commits FØR dagens
+   arbejde. Spærren var altså væk noget tid før den blev opdaget her — denne
+   fil påstod stadig det modsatte og ville have fået en fremtidig session til
+   at handle på en falsk blocker. Time Machine er en selvstændig sag og skal
+   stadig efterprøves mod regel 0 i `08_repo_politik.md`.
 
 **Aktuel næste kodeopgave:** ingen valgt. Bedre søgning fra `search-plan.md`
 er bygget og verificeret 2026-07-29; se afsnittet "Bedre søgning med uddrag og
@@ -517,9 +572,11 @@ hop til træf" ovenfor. Gates/backlog nedenfor er bevidst ikke aktuelle lige nu.
 - ✅ **B1 — LUKKET 2026-07-29.** Alle tre inline-`onclick` konverteret til
   `addEventListener` og verificeret i browser under den faktiske CSP (5/5,
   konsol ren). To guards forhindrer tilbagefald. Se afsnittet ovenfor.
-- **GitHub-kontoen er suspenderet (blocker, uden for koden).** `git push` giver
-  `403 — Your account is suspended`. Begge repos står 1 commit foran remote og
-  er kun sikret lokalt. Handling: kontakt support.github.com.
+- ~~**GitHub-kontoen er suspenderet (blocker, uden for koden).**~~ **LUKKET
+  2026-08-18** — push virker igen, verificeret med en faktisk push. Lærdommen
+  består: en tilstandsbeskrivelse i en STATUS-fil er en momentopgørelse, ikke
+  en sandhed. Denne stod forkert i ukendt tid, fordi ingen efterprøvede den med
+  én kommando (`git rev-list --count origin/dev..HEAD`).
 - **Mobile preview blokeres på Politikens WiFi** — formentlig client isolation på corporate netværk. Virker på private/home-netværk. Ikke en kode-fejl.
 - **Codex søgefelt understøtter ikke altid højreklik-paste** — VS Code/OpenAI-quirk. Workaround: ⌘V i stedet
 - **Cache for analysis.md eller HANDOVER.md kan blive forældet** hvis chats slettes/opdateres efter generering. Lav "↻ Genberegn"-knap som workaround
