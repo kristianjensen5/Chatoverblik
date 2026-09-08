@@ -205,3 +205,38 @@ til sidst, men fanger fejlen før den vises frem.
 tester `!== ""`, så `null` filtrerer alt væk og giver et falsk "0 chats".
 
 **Dato:** 2026-07-21
+
+---
+
+## En test kan fejle på din maskines tilstand — ikke på koden
+
+**Problem:** To tests stod noteret som "fejlende, åbne" i en overdragelse. Ved
+gennemgangen bestod begge. Den ene var reelt rettet af en ukommitteret ændring
+i arbejdsmappen; den anden havde aldrig været i stykker.
+`test_release_check_passes_and_blocks_legacy_artifacts` kræver
+`release/Chatoverblik-current.zip` på disken, men `release/` står i
+`.gitignore`. Den består derfor på min maskine, hvor pakken ligger, og fejler
+for enhver med en frisk klon.
+
+**Årsag:** Et testresultat er en måling af kode *plus* miljø. Når et af de to
+er udokumenteret, kan den samme test give to forskellige svar uden at nogen har
+ændret en linje kode — og fejlbeskeden peger på artefaktet, ikke på årsagen.
+
+**Fix:** Når en test står som "fejlende" i en note, så find ud af *hvorfor*, før
+du retter noget. Kør den committede kode isoleret:
+
+    D=$TMPDIR/head-check; rm -rf "$D"; mkdir -p "$D"
+    git archive HEAD | tar -x -C "$D"
+    cd "$D" && python3 -m unittest discover -s tests
+
+Afviger den fra arbejdsmappen, ligger forskellen i ukommitterede ændringer eller
+i gitignorerede filer — ikke i koden. `git archive HEAD` rører ikke arbejdstræet,
+så det er sikkert at gøre midt i andres uafsluttede arbejde.
+
+Fælden går begge veje: isolationskopien mangler også de gitignorerede filer, så
+den kan vise falske fejl. Samme mønster ramte `git ls-files --exclude-from`, der
+er blind for nestede `.gitignore`-filer og fik ufarlige build-artefakter til at
+ligne regressioner. Verificér altid med det værktøj, der læser hele
+konfigurationen — `git status` og `git check-ignore -v`, ikke en delmængde.
+
+**Dato:** 2026-09-08

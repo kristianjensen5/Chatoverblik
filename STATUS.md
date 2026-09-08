@@ -13,12 +13,49 @@ kræver en eksplicit godkendelse, hvor den fulde payload vises på skærmen før
 (`require_ai_confirmation`, uden undtagelser). Åbn aldrig et endpoint der springer
 den over.
 **Live URL:** http://localhost:7777 (lokal kun)
-**GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-08-27 ("Nyt projekt" er gjort manifeststyret og
-opretter nu et ensartet projektgrundlag med klassificeret startprompt. Kilderne
-og den lokale releasepakke er opdateret og testet, men ændringerne er ikke
-committet, pushet eller distribueret. Den nye backend er startet lokalt og
-verificeret med status `Klar (223 chats)` og aktiv projektcapability.)
+**GitHub:** `kristianjensen5-projekter/Chatoverblik` (eget nestet repo)
+**Senest opdateret:** 2026-09-08 (Manifest-arbejdet fra 26.-27. august er nu
+committet sammen med en testrettelse — to commits, der venter på push. De to
+tests, der stod noteret som fejlende, er verificeret grønne: 38/38. Intet er
+pushet eller distribueret.)
+
+---
+
+## De to "fejlende tests" og rodens .gitignore (2026-09-08)
+
+En tidligere session efterlod to punkter under "mangler". Begge er lukket, men
+den ene viste sig at være to forskellige ting.
+
+- ✅ **`test_sensitive_ai_chat_requires_payload_confirmation`** var en ægte
+  fejl. Race-fiksen i `33b6c63` (2026-08-13) gav `require_ai_confirmation` en
+  fjerde returværdi, men testen pakkede stadig kun tre ud og fejlede med
+  `ValueError: too many values to unpack (expected 3, got 4)`. Selve
+  bekræftelsen var uændret — kun testens kald var bagud. Rettet i `6451c02`.
+- ✅ **`test_release_check_passes_and_blocks_legacy_artifacts` var aldrig i
+  stykker.** Den kræver `release/Chatoverblik-current.zip` på disken, og den
+  fil er gitignoreret. Den består derfor lokalt og fejler i enhver frisk klon.
+  Se "Kendte problemer".
+- ✅ **Regressionstest:** 38/38 bestået med
+  `python3 -m unittest discover -s tests`. Bemærk: testene er `unittest`, ikke
+  pytest — pytest er ikke installeret på nogen af maskinens Python-versioner,
+  så `python3 -m pytest` fejler misvisende med "No module named pytest".
+- ✅ **Releasepakken er aktuel.** `release/Chatoverblik-current.zip` (27. august
+  09:09) er verificeret byte-identisk med den nuværende kildekode på alle fem
+  tekstfiler, og indeholder kun de syv manifestfiler — ingen `cache.json`,
+  `analysis.md`, `logs/` eller interne noter. Stadig ikke godkendt til
+  udlevering; gates fra pause-checkpointet står ved magt.
+- ✅ **Rodens `.gitignore` er lagt om til deny-by-default** (`d458aa4` i
+  Masterversioner-repoet). Den var en manuelt vedligeholdt navneliste på 143
+  linjer, og 22 projektmapper stod uden for den — `git add .` i roden ville
+  have taget 2.191 filer med, heriblandt `Hackerman/` og
+  `Kristians privater serverkontrol/`. Nu ignoreres alt på topniveau, og kun
+  eksplicit whitelistede mapper er synlige. Målt: 2.191 → 12 filer, 79 trackede
+  filer uændret, 0 sletninger. Lektien ligger i `context/05_lessons_fuld.md`.
+
+**Rettet antagelse:** briefet fra sidste session anførte, at commits `38a2600`,
+`e11db0f` og `babd728` var fra samme dag som klarsignal-arbejdet. De er fra
+**18. august**. Manifest-arbejdet fra 26.-27. august var altså nyere end dem —
+det er grunden til, at zip'en bygget 27. august stadig matcher kildekoden.
 
 ---
 
@@ -636,6 +673,18 @@ hop til træf" ovenfor. Gates/backlog nedenfor er bevidst ikke aktuelle lige nu.
   består: en tilstandsbeskrivelse i en STATUS-fil er en momentopgørelse, ikke
   en sandhed. Denne stod forkert i ukendt tid, fordi ingen efterprøvede den med
   én kommando (`git rev-list --count origin/dev..HEAD`).
+- **`test_release_check_passes_and_blocks_legacy_artifacts` kan ikke bestå på
+  en frisk klon.** Den kræver `release/Chatoverblik-current.zip` på disken, men
+  `release/` står i `.gitignore`. Testen består lokalt, hvor pakken ligger, og
+  fejler for enhver, der lige har klonet repoet — med beskeden
+  `disk artifact missing: release/Chatoverblik-current.zip`. Det er ikke en
+  kodefejl: kør `python3 scripts/build_release.py` først. Fælden er reel, fordi
+  fejlen ligner en ægte regression og kan sende en fremtidig session i gang med
+  at "reparere" noget, der virker. Overvej at lade testen springe over med
+  `skipUnless`, når artefaktet mangler.
+- **Testene er `unittest`, ikke pytest.** `python3 -m pytest` fejler med
+  "No module named pytest" på alle maskinens Python-versioner. Brug
+  `python3 -m unittest discover -s tests`.
 - **Mobile preview blokeres på Politikens WiFi** — formentlig client isolation på corporate netværk. Virker på private/home-netværk. Ikke en kode-fejl.
 - **Codex søgefelt understøtter ikke altid højreklik-paste** — VS Code/OpenAI-quirk. Workaround: ⌘V i stedet
 - **Cache for analysis.md eller HANDOVER.md kan blive forældet** hvis chats slettes/opdateres efter generering. Lav "↻ Genberegn"-knap som workaround
