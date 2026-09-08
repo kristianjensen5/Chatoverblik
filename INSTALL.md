@@ -154,3 +154,7 @@ Hvis noget ikke virker, så svar på disse spørgsmål:
 - Skriver ikke til chat-filer (kun cache.json i Chatoverblik-mappen, og
   HANDOVER.md hvis du klikker "📖 Genoptag-guide" på et projekt)
 - Kører ikke autostartet — du skal selv starte den med `start.command`
+- Importerer ikke Kristians private context- og projektregler. Derfor vises
+  "Nyt projekt" kun i en installation, der ligger ved siden af en kompatibel,
+  komplet `context/manifest.json`; knappen er skjult i den almindelige
+  kollegapakke.

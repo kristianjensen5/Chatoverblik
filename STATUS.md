@@ -14,11 +14,46 @@ kræver en eksplicit godkendelse, hvor den fulde payload vises på skærmen før
 den over.
 **Live URL:** http://localhost:7777 (lokal kun)
 **GitHub:** `kristianjensen5/Chatoverblik` (eget nestet repo, pushes løbende)
-**Senest opdateret:** 2026-08-18 (Projekt-åbning fra Command Center rettet: ventede
-et fast sekund på VS Code og fyrede chat-kommandoen mod det forkerte vindue. Venter
-nu på udvidelsens ægte klarsignal, sender første besked med i linket, og
-genoptag-forløbet er nummereret. Committet og pushet — 38a2600. GitHub-spærren er
-ophævet, se nedenfor.)
+**Senest opdateret:** 2026-08-27 ("Nyt projekt" er gjort manifeststyret og
+opretter nu et ensartet projektgrundlag med klassificeret startprompt. Kilderne
+og den lokale releasepakke er opdateret og testet, men ændringerne er ikke
+committet, pushet eller distribueret. Den nye backend er startet lokalt og
+verificeret med status `Klar (223 chats)` og aktiv projektcapability.)
+
+---
+
+## Manifeststyret projektoprettelse (2026-08-26)
+
+Den hidtidige formular havde sin egen forældede startprompt og kendte ikke den
+centrale context-routing. Det gjorde Command Center til en parallel regelkilde.
+
+- ✅ `chatoverblik.py` læser nu `../context/manifest.json` og vælger både
+  `always`-regler og de dokumenter, der matcher projektets type,
+  leveringsform, data og eksterne services.
+- ✅ Formularen indsamler klassifikationen samt dagens mål, færdigbevis og
+  bindende ramme. Den første prompt genereres af backenden, ikke af en
+  hardkodet JavaScript-kopi.
+- ✅ Nye projekter får `STATUS.md`, `README.md`, `.gitignore`, `AGENTS.md`,
+  `CLAUDE.md` og `LESSONS.md` fra de kanoniske templates. Der oprettes ikke
+  længere automatisk en `index.html`, fordi ikke alle projekter er websites.
+- ✅ Eksisterende filer overskrives ikke. Manifest og alle templates valideres,
+  før en ny mappe oprettes. Nye projekter bygges i en stagingmappe og flyttes
+  først på plads, når alle filer er skrevet; eksisterende projekter bruger
+  eksklusiv filoprettelse uden overskrivning.
+- ✅ Startprompt og projektinstruktion bruger absolutte stier til den centrale
+  bootstrap og de routede filer. Unicode-navne normaliseres, og en eksisterende
+  selvstændig `CLAUDE.md` udløser konflikt i stedet for parallelle regler.
+- ✅ Regressionstest: 38 Python-tests bestået. Browserkontrol bestået på
+  desktop og 390 px mobil; ugyldig `../`-sti blev afvist uden filoprettelse,
+  submitknappen blev genaktiveret efter fejlen, modal-scroll og bredde bestod,
+  og browserkonsollen var uden warnings eller errors.
+- ✅ `release/Chatoverblik-current.zip` er genbygget og valideret lokalt.
+  Pakken er ikke publiceret eller distribueret.
+- ✅ Kollegapakken indeholder bevidst ikke Kristians private context. "Nyt
+  projekt" skjules derfor automatisk, når en komplet lokal
+  `context/manifest.json` ikke findes; de øvrige værktøjer påvirkes ikke.
+- ✅ Den normale proces på port 7777 er startet 2026-08-27 og svarer med
+  `project_setup_available: true`.
 
 ---
 

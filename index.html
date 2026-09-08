@@ -399,6 +399,7 @@
     opacity: 0.6;
     cursor: wait;
   }
+  .sidebar-tool-btn[hidden] { display: none; }
 
   /* Analyse-modal */
   .analysis-content {
@@ -1361,7 +1362,7 @@
 
     <div class="sidebar-tools">
       <div class="section-label-mini" style="margin-bottom:8px;">Værktøjer</div>
-      <button id="btn-new-project" class="sidebar-tool-btn">🆕 Nyt projekt</button>
+      <button id="btn-new-project" class="sidebar-tool-btn" hidden>🆕 Nyt projekt</button>
       <button id="btn-rescan" class="sidebar-tool-btn">↻ Genscan chats</button>
       <button id="btn-widgets" class="sidebar-tool-btn">📚 Komponent-bibliotek</button>
       <button id="btn-dashboard" class="sidebar-tool-btn">📊 Projekt-status</button>
@@ -1629,6 +1630,7 @@ async function loadSessions() {
     state.projects = data.projects || [];
     state.loading  = data.loading;
     state.status   = data.status;
+    $("btn-new-project").hidden = data.project_setup_available !== true;
     setServerHealth(data.loading ? "busy" : "alive");
     renderSidebar();
     renderGrid();
@@ -2987,7 +2989,7 @@ async function showNewProject() {
   $("modal-body").innerHTML = `<button class="close" aria-label="Luk">×</button>
     <h2 style="font-family:var(--display-font);font-weight:400;margin:0 0 14px;">🆕 Nyt projekt</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:18px;">
-      Opretter STATUS.md, README.md, .gitignore og en tom index.html. Filer der allerede findes overskrives ikke.
+      Opretter projektets status, instruktioner, lektier, README og sikker .gitignore. Filer der allerede findes overskrives ikke.
     </p>
     <div style="display:flex;flex-direction:column;gap:14px;">
       <div>
@@ -3005,10 +3007,61 @@ async function showNewProject() {
           <option value="">Henter mapper…</option>
         </select>
       </label>
+      <label>
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Kort beskrivelse</div>
+        <textarea id="np-description" maxlength="500" rows="2" placeholder="Hvad skal projektet bruges til?" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:14px;resize:vertical;"></textarea>
+      </label>
       <div>
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">Type</div>
         <label style="margin-right:18px;cursor:pointer;"><input type="radio" name="np-type" value="arbejde" checked> Arbejde</label>
         <label style="cursor:pointer;"><input type="radio" name="np-type" value="privat"> Privat</label>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Leveringsform</div>
+          <select id="np-delivery" style="width:100%;padding:9px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;background:#fff;">
+            <option value="afklares">Afklares</option>
+            <option value="internt">Internt værktøj</option>
+            <option value="inline-superartikel">Inline i superartikel</option>
+            <option value="iframe">Iframe i artikel</option>
+            <option value="selvstaendig">Selvstændig side/app</option>
+          </select>
+        </label>
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Data</div>
+          <select id="np-data" style="width:100%;padding:9px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;background:#fff;">
+            <option value="afklares">Afklares</option>
+            <option value="ingen">Ingen beskyttede data</option>
+            <option value="laeserdata">Læserdata</option>
+            <option value="persondata">Persondata</option>
+            <option value="privatoekonomi">Privatøkonomi</option>
+            <option value="kildenoter">Kildenoter</option>
+            <option value="secrets">Secrets</option>
+            <option value="licenseret">Licenseret indhold</option>
+          </select>
+        </label>
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Eksterne services</div>
+          <select id="np-external" style="width:100%;padding:9px 10px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;background:#fff;">
+            <option value="afklares">Afklares</option>
+            <option value="nej">Nej</option>
+            <option value="ja">Ja</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Dagens mål</div>
+          <input id="np-goal" maxlength="300" type="text" placeholder="Én konkret opgave" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;">
+        </label>
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Færdigbevis</div>
+          <input id="np-done" maxlength="300" type="text" placeholder="Hvad viser, at opgaven er løst?" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;">
+        </label>
+        <label style="min-width:0;">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:4px;">Bindende ramme</div>
+          <input id="np-constraint" maxlength="300" type="text" placeholder="Fx ingen deploy uden godkendelse" style="width:100%;padding:9px 12px;border:1px solid var(--line-strong);border-radius:4px;font:inherit;font-size:13px;">
+        </label>
       </div>
       <div>
         <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);margin-bottom:6px;">AI-extension at åbne med</div>
@@ -3054,7 +3107,18 @@ async function showNewProject() {
   $("np-submit").onclick = async () => {
     const mode = document.querySelector("input[name='np-mode']:checked")?.value || "new";
     const type = document.querySelector("input[name='np-type']:checked")?.value;
-    let payload = { type };
+    const source = document.querySelector("input[name='np-source']:checked")?.value || "claude";
+    let payload = {
+      type,
+      source,
+      description: $("np-description").value,
+      delivery: $("np-delivery").value,
+      data: $("np-data").value,
+      external_services: $("np-external").value,
+      goal: $("np-goal").value,
+      done_when: $("np-done").value,
+      constraint: $("np-constraint").value,
+    };
     let displayName = "";
     if (mode === "new") {
       const name = $("np-name").value.trim();
@@ -3068,43 +3132,24 @@ async function showNewProject() {
       displayName = existing.split("/").pop();
     }
     $("np-feedback").textContent = mode === "new" ? "Opretter…" : "Sætter op…";
-    const r = await fetch("/api/new-project", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
-    if (d.ok) {
+    const submitButton = $("np-submit");
+    const submitLabel = submitButton.textContent;
+    submitButton.disabled = true;
+    submitButton.textContent = mode === "new" ? "Opretter…" : "Sætter op…";
+    try {
+      const r = await fetch("/api/new-project", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) {
+        $("np-feedback").innerHTML = `<span style='color:var(--accent);'>Fejl: ${escapeHTML(d.error || `HTTP ${r.status}`)}</span>`;
+        return;
+      }
+
       const name = d.name || displayName;
-      const firstPrompt = `Hej! Jeg ${d.reused ? "fortsætter arbejde på" : "starter et nyt projekt"}: **${name}** (${type}).
-
-Projektet/dagens opgave handler kort fortalt om: [skriv 1-3 sætninger i almindeligt sprog].
-
-Før vi går i gang vil jeg være sikker på du har fuld kontekst. Gør følgende — og bekræft hvert punkt eksplicit:
-
-**1. Memory** (auto-loaded af dig — jeg vil bare se du har den):
-List de 3-5 mest relevante memory-entries du har om mig fra Masterversioner-konteksten (user_profile, vigtige feedback-regler, relaterede projekter). Lige korte titler.
-
-**2. Læs disse filer i denne rækkefølge:**
-- \`Masterversioner/CLAUDE.md\` (eller AGENTS.md hvis du er Codex) — entry-point
-- \`Masterversioner/context/00_index.md\` — orientering
-- \`Masterversioner/context/01_arbejdsgang.md\` — workflow-regler
-- \`Masterversioner/context/05_lessons.md\` — globale lærte lektier
-- \`Masterversioner/context/07_model_playbook.md\` — hvilken model til hvad (Opus/Codex til plan/audit, Sonnet/Haiku til byggeri)
-${type === "arbejde" ? "- `Masterversioner/context/02_brand.md` — Politiken-brand (CSS, typografi, CMS)\n- `Masterversioner/context/03_security.md` — sikkerheds-baseline\n" : ""}- \`Masterversioner/context/04_widgets.md\` — eksisterende komponenter (måske er der en relevant skabelon)
-- \`Masterversioner/${name}/STATUS.md\` — den tomme status-fil jeg lige har oprettet
-
-**3. Bekræft med:**
-- Én sætning om hvad projektet handler om (din forståelse — gerne hvis du genkender en pattern fra mine andre projekter)
-- Tre konkrete spørgsmål du har brug for svar på, for at vi kan komme i gang
-
-Så ved jeg du har den fulde kontekst og ikke bare har "antaget".
-
-Dagens ene mål: [én konkret opgave].
-Vi er færdige når: [ét verificerbart bevis, fx 'testet på mobil og deployet' / 'verificeret med screenshot' / 'deployet og endpoint-testet'].
-Bindende ramme i dag: [vigtigste constraint, fx 'rør ikke mobil', 'læserdata må aldrig online', 'ingen deploy uden OK'].
-
-Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævner præcis hvad der mangler — især åbne bugs.`;
+      const firstPrompt = d.first_prompt || "";
 
       const createdList = (d.created || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
       const skippedList = (d.skipped || []).map(f => `<code>${escapeHTML(f)}</code>`).join(", ");
@@ -3126,11 +3171,15 @@ Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævne
         </div>`;
 
       $("np-copy-prompt").onclick = async () => {
-        await navigator.clipboard.writeText(firstPrompt);
-        toast("Første besked kopieret — paste den i Claude/Codex");
+        try {
+          await navigator.clipboard.writeText(firstPrompt);
+          toast("Første besked kopieret — paste den i Claude/Codex");
+        } catch (e) {
+          toast("Kunne ikke kopiere: " + e.message);
+        }
       };
       $("np-open").onclick = async () => {
-        const chosenSource = document.querySelector("input[name='np-source']:checked")?.value || "claude";
+        const chosenSource = source;
         const btn = $("np-open");
         const originalLabel = btn.textContent;
         btn.disabled = true;
@@ -3142,6 +3191,10 @@ Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævne
             body: JSON.stringify({ cwd: d.path, source: chosenSource, mode: "new-chat", prompt: firstPrompt }),
           });
           const rd = await r.json();
+          if (!r.ok || !rd.ok) {
+            toast("Kunne ikke åbne VS Code: " + (rd.error || `HTTP ${r.status}`));
+            return;
+          }
           if (rd.ready === false) {
             toast("VS Code nåede ikke at blive klar. Vinduet er åbent — start chatten manuelt.");
           } else if (rd.prompt_sent === false) {
@@ -3158,8 +3211,14 @@ Hvis vi stopper før det, slutter chatten med en STATUS.md-opdatering der nævne
         }
         closeModal();
       };
-    } else {
-      $("np-feedback").innerHTML = `<span style='color:var(--accent);'>Fejl: ${escapeHTML(d.error || "")}</span>`;
+    } catch (e) {
+      $("np-feedback").innerHTML = `<span style='color:var(--accent);'>Fejl: ${escapeHTML(e.message)}</span>`;
+    } finally {
+      const currentSubmit = $("np-submit");
+      if (currentSubmit) {
+        currentSubmit.disabled = false;
+        currentSubmit.textContent = submitLabel;
+      }
     }
   };
 }

@@ -19,7 +19,9 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import unicodedata
@@ -2014,6 +2016,361 @@ def rescan_loop():
         perform_rescan(full=False)
 
 
+class ProjectSetupError(ValueError):
+    """Kontrolleret fejl fra Command Centers projektgenerator."""
+
+    def __init__(self, message, status=500):
+        super().__init__(message)
+        self.status = status
+
+
+PROJECT_TYPES = {"arbejde", "privat"}
+PROJECT_DELIVERIES = {
+    "afklares", "internt", "inline-superartikel", "iframe", "selvstaendig",
+}
+PROJECT_DATA_CLASSES = {
+    "afklares", "ingen", "laeserdata", "persondata", "privatoekonomi",
+    "kildenoter", "secrets", "licenseret",
+}
+PROJECT_EXTERNAL_SERVICE_STATES = {"afklares", "ja", "nej"}
+PROJECT_SOURCES = {"claude", "codex"}
+PROJECT_CONDITION_VALUES = {
+    "type": PROJECT_TYPES,
+    "delivery": PROJECT_DELIVERIES,
+    "data": PROJECT_DATA_CLASSES,
+    "external_services": PROJECT_EXTERNAL_SERVICE_STATES,
+}
+REQUIRED_PROJECT_TEMPLATES = {
+    "STATUS.md", "README.md", ".gitignore", "AGENTS.md", "CLAUDE.md",
+    "LESSONS.md",
+}
+TEMPLATE_TOKEN_RE = re.compile(r"\{\{([A-Z][A-Z0-9_]*)\}\}")
+
+
+def _manifest_file(root, relative_path, label):
+    """Resolve a manifest path, constrained to the Masterversioner root."""
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise ProjectSetupError(f"Manifestet mangler en gyldig sti til {label}")
+    root = Path(root).resolve()
+    target = (root / relative_path).resolve()
+    if target == root or not _is_relative_to(target, root):
+        raise ProjectSetupError(f"Manifeststien til {label} forlader Masterversioner")
+    if not target.is_file():
+        raise ProjectSetupError(f"Påkrævet fil mangler: {relative_path}")
+    return target
+
+
+def load_context_manifest(root):
+    """Load and validate the routing manifest and every referenced file."""
+    root = Path(root).resolve()
+    manifest_path = root / "context" / "manifest.json"
+    if not manifest_path.is_file():
+        raise ProjectSetupError("Påkrævet fil mangler: context/manifest.json")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProjectSetupError(f"Kunne ikke læse context/manifest.json: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ProjectSetupError("context/manifest.json har ukendt schema_version")
+
+    prompt_path = manifest.get("prompt_template")
+    _manifest_file(root, prompt_path, "startprompten")
+    _manifest_file(root, manifest.get("codex_global_router"),
+                   "den globale Codex-router")
+
+    templates = manifest.get("project_templates")
+    if not isinstance(templates, dict):
+        raise ProjectSetupError("Manifestet mangler project_templates")
+    missing_templates = sorted(REQUIRED_PROJECT_TEMPLATES - set(templates))
+    if missing_templates:
+        raise ProjectSetupError(
+            "Manifestet mangler projektskabeloner: " + ", ".join(missing_templates)
+        )
+    unexpected_templates = sorted(set(templates) - REQUIRED_PROJECT_TEMPLATES)
+    if unexpected_templates:
+        raise ProjectSetupError(
+            "Manifestet har ukendte projektskabeloner: "
+            + ", ".join(unexpected_templates)
+        )
+    for filename in REQUIRED_PROJECT_TEMPLATES:
+        _manifest_file(root, templates.get(filename), f"skabelonen {filename}")
+
+    documents = manifest.get("documents")
+    if not isinstance(documents, list) or not documents:
+        raise ProjectSetupError("Manifestet har ingen routedokumenter")
+    seen_ids = set()
+    for document in documents:
+        if not isinstance(document, dict):
+            raise ProjectSetupError("Manifestet indeholder et ugyldigt dokument")
+        doc_id = document.get("id")
+        if not isinstance(doc_id, str) or not doc_id or doc_id in seen_ids:
+            raise ProjectSetupError("Manifestets dokument-id'er skal være unikke")
+        seen_ids.add(doc_id)
+        _manifest_file(root, document.get("path"), f"dokumentet {doc_id}")
+        load_mode = document.get("load")
+        if load_mode not in {"always", "conditional", "manual"}:
+            raise ProjectSetupError(f"Dokumentet {doc_id} har ugyldig load-værdi")
+        if load_mode == "conditional":
+            conditions = document.get("when")
+            match_mode = document.get("match", "all")
+            if match_mode not in {"all", "any"}:
+                raise ProjectSetupError(
+                    f"Dokumentet {doc_id} har ugyldig match-værdi"
+                )
+            if not isinstance(conditions, dict) or not conditions:
+                raise ProjectSetupError(f"Dokumentet {doc_id} mangler when-betingelser")
+            for field, values in conditions.items():
+                allowed_values = PROJECT_CONDITION_VALUES.get(field)
+                if allowed_values is None:
+                    raise ProjectSetupError(
+                        f"Dokumentet {doc_id} har ukendt betingelse: {field}"
+                    )
+                if not isinstance(values, list) or not values:
+                    raise ProjectSetupError(
+                        f"Dokumentet {doc_id} har ugyldige betingelser"
+                    )
+                invalid_values = set(values) - allowed_values
+                if invalid_values:
+                    raise ProjectSetupError(
+                        f"Dokumentet {doc_id} har ugyldige værdier for {field}: "
+                        + ", ".join(sorted(invalid_values))
+                    )
+    return manifest
+
+
+def project_setup_available(root):
+    """Whether this installation has a complete local project-rule bundle."""
+    try:
+        load_context_manifest(root)
+    except ProjectSetupError:
+        return False
+    return True
+
+
+def _clean_project_text(value, default, max_length):
+    """Collapse control/whitespace and prevent user text becoming a token."""
+    text_value = str(value or "")
+    text_value = " ".join(text_value.split())
+    text_value = text_value.replace("{{", "{ {").replace("}}", "} }")
+    return (text_value or default)[:max_length]
+
+
+def normalize_project_name(value):
+    """Validate a portable Unicode project folder name."""
+    name = unicodedata.normalize("NFC", str(value or "").strip())
+    if not (1 <= len(name) <= 120):
+        raise ProjectSetupError(
+            "Ugyldigt navn (1-120 bogstaver, tal, mellemrum, _ eller -)", 400
+        )
+    if not name[0].isalnum() or any(
+        not (character.isalnum() or character in " _-")
+        for character in name
+    ):
+        raise ProjectSetupError(
+            "Ugyldigt navn (1-120 bogstaver, tal, mellemrum, _ eller -)", 400
+        )
+    return name
+
+
+def normalize_project_metadata(data):
+    if not isinstance(data, dict):
+        raise ProjectSetupError("Projektdata skal være et objekt", 400)
+
+    def choice(field, allowed):
+        value = str(data.get(field) or "").strip()
+        if value not in allowed:
+            raise ProjectSetupError(
+                f"Ugyldig værdi for {field}: vælg mellem {', '.join(sorted(allowed))}",
+                400,
+            )
+        return value
+
+    return {
+        "type": choice("type", PROJECT_TYPES),
+        "delivery": choice("delivery", PROJECT_DELIVERIES),
+        "data": choice("data", PROJECT_DATA_CLASSES),
+        "external_services": choice(
+            "external_services", PROJECT_EXTERNAL_SERVICE_STATES
+        ),
+        "source": choice("source", PROJECT_SOURCES),
+        "description": _clean_project_text(
+            data.get("description"), "Afklares i første arbejdschat.", 500
+        ),
+        "goal": _clean_project_text(
+            data.get("goal"), "Afklares i første arbejdschat.", 300
+        ),
+        "done_when": _clean_project_text(
+            data.get("done_when"), "Et verificerbart færdigbevis er aftalt.", 300
+        ),
+        "constraint": _clean_project_text(
+            data.get("constraint"), "Ingen commit, push eller deploy uden godkendelse.", 300
+        ),
+    }
+
+
+def select_context_documents(root, metadata, manifest=None):
+    """Return manifest paths for always + matching conditional documents."""
+    manifest = manifest or load_context_manifest(root)
+    selected = []
+    for document in manifest["documents"]:
+        load_mode = document["load"]
+        if load_mode == "always":
+            selected.append(document["path"])
+        elif load_mode == "conditional":
+            conditions = document["when"]
+            matches = [
+                metadata.get(field) in allowed
+                for field, allowed in conditions.items()
+            ]
+            match_mode = document.get("match", "all")
+            if (any(matches) if match_mode == "any" else all(matches)):
+                selected.append(document["path"])
+    return selected
+
+
+def render_project_template(template_text, values, template_name="skabelon"):
+    """Render strict double-brace tokens and reject unresolved placeholders."""
+    tokens = set(TEMPLATE_TOKEN_RE.findall(template_text))
+    missing = sorted(token for token in tokens if token not in values)
+    if missing:
+        raise ProjectSetupError(
+            f"{template_name} kræver ukendte felter: {', '.join(missing)}"
+        )
+    rendered = TEMPLATE_TOKEN_RE.sub(lambda match: str(values[match.group(1)]),
+                                     template_text)
+    if "{{" in rendered or "}}" in rendered:
+        raise ProjectSetupError(f"{template_name} har uerstattede skabelonfelter")
+    return rendered
+
+
+def _project_template_values(root, name, metadata, context_files, reused):
+    root = Path(root).resolve()
+    entrypoint = str(
+        root / ("CLAUDE.md" if metadata["source"] == "claude" else "AGENTS.md")
+    )
+    routed_lines = "\n".join(
+        f"- `{root / path}`" for path in context_files
+    )
+    return {
+        "PROJECT_NAME": name,
+        "TYPE": metadata["type"],
+        "STATE": "aktiv",
+        "DELIVERY": metadata["delivery"],
+        "DATA": metadata["data"],
+        "EXTERNAL_SERVICES": metadata["external_services"],
+        "LIVE_URL": "ingen (nyt projekt)",
+        "GITHUB": "ikke oprettet endnu",
+        "UPDATED_AT": time.strftime("%Y-%m-%d"),
+        "DESCRIPTION": metadata["description"],
+        "ACTION": "fortsætter arbejdet på" if reused else "starter",
+        "ROOT_ENTRYPOINT": entrypoint,
+        "CONTEXT_FILES": routed_lines,
+        "GOAL": metadata["goal"],
+        "DONE_WHEN": metadata["done_when"],
+        "CONSTRAINT": metadata["constraint"],
+    }
+
+
+def build_first_prompt(root, metadata, *, name, reused=False, manifest=None):
+    manifest = manifest or load_context_manifest(root)
+    context_files = select_context_documents(root, metadata, manifest)
+    values = _project_template_values(
+        root, name, metadata, context_files, reused
+    )
+    prompt_path = _manifest_file(root, manifest["prompt_template"], "startprompten")
+    return render_project_template(
+        prompt_path.read_text(encoding="utf-8"), values, "startprompten"
+    )
+
+
+def create_or_prepare_project(root, data):
+    """Create missing project bootstrap files without overwriting user files."""
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise ProjectSetupError("Masterversioner-roden findes ikke")
+
+    metadata = normalize_project_metadata(data)
+    manifest = load_context_manifest(root)
+    existing_cwd = str(data.get("existing_cwd") or "").strip()
+    reused = bool(existing_cwd)
+    if reused:
+        base = validate_canonical_path(
+            existing_cwd, purpose="new-project", want_dir=True,
+            allowed_roots=[root], deny_sensitive=True,
+        )
+        if base == root:
+            raise ProjectSetupError("Vælg en projektmappe under Masterversioner", 400)
+        name = base.name
+    else:
+        name = normalize_project_name(data.get("name"))
+        base = root / name
+        if base.exists():
+            raise ProjectSetupError(f"Mappen findes allerede: {base}", 400)
+
+    existing_claude = base / "CLAUDE.md"
+    if reused and existing_claude.is_file():
+        claude_text = existing_claude.read_text(encoding="utf-8").strip()
+        if claude_text != "@AGENTS.md":
+            raise ProjectSetupError(
+                "Projektets eksisterende CLAUDE.md er ikke en import af "
+                "AGENTS.md. Migrér instruktionerne manuelt først, så ingen "
+                "projektregler overskrives.",
+                409,
+            )
+
+    context_files = select_context_documents(root, metadata, manifest)
+    values = _project_template_values(
+        root, name, metadata, context_files, reused
+    )
+    rendered_files = {}
+    for filename, relative_path in manifest["project_templates"].items():
+        template_path = _manifest_file(root, relative_path, f"skabelonen {filename}")
+        rendered_files[filename] = render_project_template(
+            template_path.read_text(encoding="utf-8"), values, filename
+        )
+    first_prompt = build_first_prompt(
+        root, metadata, name=name, reused=reused, manifest=manifest
+    )
+
+    created = []
+    skipped = []
+    if reused:
+        for filename, content in rendered_files.items():
+            target = base / filename
+            try:
+                with target.open("x", encoding="utf-8") as handle:
+                    handle.write(content)
+            except FileExistsError:
+                skipped.append(filename)
+                continue
+            created.append(filename)
+    else:
+        staging = Path(tempfile.mkdtemp(prefix=".command-center-project-", dir=root))
+        try:
+            for filename, content in rendered_files.items():
+                target = staging / filename
+                with target.open("x", encoding="utf-8") as handle:
+                    handle.write(content)
+                created.append(filename)
+            if base.exists():
+                raise ProjectSetupError(f"Mappen findes allerede: {base}", 400)
+            staging.rename(base)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+    return {
+        "ok": True,
+        "path": str(base),
+        "name": name,
+        "created": created,
+        "skipped": skipped,
+        "reused": reused,
+        "first_prompt": first_prompt,
+        "context_files": context_files,
+    }
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # stille
@@ -2180,6 +2537,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "status": STATE["status"],
                 "sessions": STATE["sessions"],
                 "projects": STATE["projects"],
+                "project_setup_available": project_setup_available(
+                    MASTERVERSIONER_ROOT
+                ),
             })
             return
         if self.path == "/api/projects":
@@ -3082,85 +3442,11 @@ Begrænsninger:
             return
 
         if self.path == "/api/new-project":
-            ptype = (data.get("type") or "").strip()
-            if ptype not in ("arbejde", "privat"):
-                self._send_json({"ok": False, "error": "Type skal være 'arbejde' eller 'privat'"}, 400)
-                return
-            # Brug eksisterende mappe (top-niveau under Masterversioner) ELLER opret ny
-            existing_cwd = (data.get("existing_cwd") or "").strip()
-            if existing_cwd:
-                try:
-                    target = Path(existing_cwd).resolve()
-                except Exception:
-                    self._send_json({"ok": False, "error": "Ugyldig sti"}, 400)
-                    return
-                root_str = str(MASTERVERSIONER_ROOT.resolve())
-                if not (str(target).startswith(root_str + "/") and target.is_dir()):
-                    self._send_json({"ok": False,
-                        "error": "Mappen er ikke under Masterversioner"}, 403)
-                    return
-                base = target
-                name = target.name
-            else:
-                name = (data.get("name") or "").strip()
-                if not name or not re.match(r"^[A-Za-zÆØÅæøå0-9 _-]+$", name):
-                    self._send_json({"ok": False,
-                        "error": "Ugyldigt navn (kun bogstaver, tal, mellemrum, _ og -)"}, 400)
-                    return
-                base = MASTERVERSIONER_ROOT / name
-                if base.exists():
-                    self._send_json({"ok": False, "error": f"Mappen findes allerede: {base}"}, 400)
-                    return
-            created = []
-            skipped = []
             try:
-                if not existing_cwd:
-                    base.mkdir(parents=True)
-                # STATUS.md — kun hvis den ikke findes (beskyt eksisterende arbejde)
-                status_path = base / "STATUS.md"
-                if status_path.exists():
-                    skipped.append("STATUS.md")
-                else:
-                    template = (MASTERVERSIONER_ROOT
-                               / "context" / "06_status_template.md")
-                    status_text = template.read_text(encoding="utf-8") if template.exists() else ""
-                    status_text = (status_text
-                                  .replace("<PROJEKTNAVN>", name)
-                                  .replace("arbejde | privat", ptype)
-                                  .replace("ÅÅÅÅ-MM-DD", time.strftime("%Y-%m-%d")))
-                    status_path.write_text(status_text, encoding="utf-8")
-                    created.append("STATUS.md")
-                # README.md
-                readme_path = base / "README.md"
-                if readme_path.exists():
-                    skipped.append("README.md")
-                else:
-                    readme_path.write_text(
-                        f"# {name}\n\nKort beskrivelse her.\n\nSe STATUS.md for igangværende status.\n",
-                        encoding="utf-8")
-                    created.append("README.md")
-                # .gitignore
-                gitignore_path = base / ".gitignore"
-                if gitignore_path.exists():
-                    skipped.append(".gitignore")
-                else:
-                    gitignore_path.write_text(
-                        ".DS_Store\nnode_modules/\n*.log\n.wrangler/\n",
-                        encoding="utf-8")
-                    created.append(".gitignore")
-                # index.html — opret kun hvis mappen ikke har en *.html i forvejen
-                if any(base.glob("*.html")):
-                    skipped.append("index.html (anden .html findes allerede)")
-                else:
-                    (base / "index.html").write_text(
-                        f"<!DOCTYPE html>\n<html lang=\"da\">\n<head>\n  <meta charset=\"utf-8\">\n"
-                        f"  <title>{name}</title>\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
-                        f"</head>\n<body>\n  <h1>{name}</h1>\n</body>\n</html>\n",
-                        encoding="utf-8")
-                    created.append("index.html")
-                self._send_json({"ok": True, "path": str(base), "name": name,
-                                "created": created, "skipped": skipped,
-                                "reused": bool(existing_cwd)})
+                result = create_or_prepare_project(MASTERVERSIONER_ROOT, data)
+                self._send_json(result)
+            except (ProjectSetupError, PathValidationError) as e:
+                self._send_json({"ok": False, "error": str(e)}, e.status)
             except Exception as e:
                 self._send_json({"ok": False, "error": str(e)}, 500)
             return
