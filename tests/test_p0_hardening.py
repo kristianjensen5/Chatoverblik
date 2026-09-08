@@ -103,7 +103,7 @@ class HardeningCase(unittest.TestCase):
     def test_sensitive_ai_chat_requires_payload_confirmation(self):
         session = chatoverblik.STATE["sessions"][0]
         payload = chatoverblik.build_title_payload(session)
-        ok, response, status = chatoverblik.require_ai_confirmation(
+        ok, response, status, _confirmed_payload = chatoverblik.require_ai_confirmation(
             {}, action="regenerate-title", model=chatoverblik.MODEL,
             payload=payload, sensitivity="chat"
         )
